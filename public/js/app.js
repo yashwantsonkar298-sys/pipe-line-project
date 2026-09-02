@@ -510,6 +510,75 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
   }, { passive: false });
 })();
 
+// ---- Screen recording -------------------------------------------------
+const btnRecord = document.getElementById('btn-record');
+const recordText = document.getElementById('record-text');
+let recordingActive = false;
+if (btnRecord) {
+  btnRecord.addEventListener('click', async () => {
+    btnRecord.disabled = true;
+    try {
+      if (!recordingActive) {
+        const r = await (await fetch('/api/record/start', { method: 'POST' })).json();
+        if (r.success) {
+          recordingActive = true;
+          recordText.textContent = '■ STOP REC';
+          btnRecord.classList.add('btn-primary');
+          appendTerminalLine('[RECORD] Screen recording started (max 180s).', 'adb-info');
+        } else { showToast('RECORD FAILED', r.error || 'could not start', 'error'); }
+      } else {
+        appendTerminalLine('[RECORD] Stopping + pulling video…', 'system');
+        const r = await (await fetch('/api/record/stop', { method: 'POST' })).json();
+        recordingActive = false;
+        recordText.textContent = '● REC';
+        btnRecord.classList.remove('btn-primary');
+        if (r.success) {
+          const a = document.createElement('a');
+          a.href = r.url; a.download = r.fileName;
+          document.body.appendChild(a); a.click(); a.remove();
+          showToast('RECORDING SAVED', `${r.fileName} (${Math.round(r.size / 1024)} KB)`, 'success');
+        } else { showToast('RECORD FAILED', r.error || 'could not stop', 'error'); }
+      }
+    } catch (e) {
+      recordingActive = false; recordText.textContent = '● REC'; btnRecord.classList.remove('btn-primary');
+      showToast('RECORD ERROR', e.message, 'error');
+    } finally {
+      btnRecord.disabled = false;
+    }
+  });
+}
+
+// ---- Install APK ----------------------------------------------------
+const btnInstallApk = document.getElementById('btn-install-apk');
+const apkFileInput = document.getElementById('apk-file-input');
+if (btnInstallApk && apkFileInput) {
+  btnInstallApk.addEventListener('click', () => apkFileInput.click());
+  apkFileInput.addEventListener('change', async () => {
+    const file = apkFileInput.files && apkFileInput.files[0];
+    if (!file) return;
+    btnInstallApk.disabled = true;
+    btnInstallApk.textContent = '📦 INSTALLING…';
+    appendTerminalLine(`[APK] Installing ${file.name}…`, 'adb-info');
+    try {
+      const fd = new FormData();
+      fd.append('apk', file);
+      const r = await (await fetch('/api/apps/install', { method: 'POST', body: fd })).json();
+      if (r.success) {
+        showToast('APK INSTALLED', file.name, 'success');
+        appendTerminalLine(`[APK] ${file.name} installed.`, 'adb-success');
+      } else {
+        showToast('INSTALL FAILED', r.error?.message || r.error || 'unknown', 'error');
+      }
+    } catch (e) {
+      showToast('INSTALL FAILED', e.message, 'error');
+    } finally {
+      btnInstallApk.disabled = false;
+      btnInstallApk.textContent = '📦 INSTALL APK ON PHONE';
+      apkFileInput.value = '';
+    }
+  });
+}
+
 async function fetchScreenshot() {
   try {
     const res = await fetch('/api/screenshot');

@@ -63,6 +63,14 @@ import {
   validateMacro
 } from './macros.js';
 import { captureFrame, sendTap, sendSwipe, scaleToDevice } from './screenMirror.js';
+import {
+  installApk,
+  uninstallPackage,
+  listThirdPartyPackages,
+  startRecording,
+  stopRecording,
+  isRecording
+} from './deviceOps.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -507,6 +515,77 @@ app.get('/api/files/storage', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ---- APK install / uninstall / list -----------------------------------
+app.post('/api/apps/install', upload.single('apk'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No APK provided' });
+  const tmp = path.join(uploadsDir, `install_${Date.now()}.apk`);
+  try {
+    fs.renameSync(req.file.path, tmp);
+    const diag = await getDiagnostics();
+    if (!diag.connected) throw new Error('No device connected');
+    const result = await installApk(tmp, diag.deviceId);
+    res.json(result);
+  } catch (error) {
+    sendSafeError(res, error);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    if (req.file && fs.existsSync(req.file.path)) { try { fs.unlinkSync(req.file.path); } catch { /* ignore */ } }
+  }
+});
+
+app.get('/api/apps/list', async (req, res) => {
+  try {
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    res.json({ packages: await listThirdPartyPackages(diag.deviceId) });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.delete('/api/apps/:pkg', async (req, res) => {
+  try {
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    res.json(await uninstallPackage(req.params.pkg, diag.deviceId));
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+// ---- Screen recording ------------------------------------------------
+let lastRecording = null; // { path, fileName }
+
+app.get('/api/record/status', (req, res) => res.json({ recording: isRecording() }));
+
+app.post('/api/record/start', async (req, res) => {
+  try {
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    res.json(await startRecording(diag.deviceId));
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.post('/api/record/stop', async (req, res) => {
+  try {
+    const result = await stopRecording();
+    lastRecording = { path: result.path, fileName: result.fileName };
+    res.json({ success: true, fileName: result.fileName, size: result.size, url: '/api/record/latest?t=' + Date.now() });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.get('/api/record/latest', screenLimiter.middleware, (req, res) => {
+  if (!lastRecording || !fs.existsSync(lastRecording.path)) {
+    return res.status(404).json({ error: 'No recording available' });
+  }
+  res.download(lastRecording.path, lastRecording.fileName);
+});
+
 
 // Setup server and WebSockets
 const server = createServer(app);
