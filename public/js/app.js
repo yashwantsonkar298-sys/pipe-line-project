@@ -380,26 +380,96 @@ btnRefreshScreen.addEventListener('click', async () => {
   await fetchScreenshot();
 });
 
-let liveFeedInterval = null;
-btnLiveFeed.addEventListener('click', () => {
-  if (liveFeedInterval) {
-    // Stop Live Feed
-    clearInterval(liveFeedInterval);
-    liveFeedInterval = null;
-    liveFeedText.textContent = 'LIVE FEED';
-    btnLiveFeed.classList.remove('active', 'btn-primary');
-    btnLiveFeed.classList.add('btn-secondary');
-    appendTerminalLine('[SYSTEM] Live Screen Feed stopped.', 'system');
-  } else {
-    // Start Live Feed
-    liveFeedText.textContent = 'STOP FEED';
-    btnLiveFeed.classList.add('active', 'btn-primary');
-    btnLiveFeed.classList.remove('btn-secondary');
-    appendTerminalLine('[SYSTEM] Starting Live Screen Feed (1 FPS)...', 'adb-info');
-    fetchScreenshot(); // initial fetch
-    liveFeedInterval = setInterval(fetchScreenshot, 2000); // 2 sec interval for stability
+// ==========================================================================
+// Live Screen Mirror + tap-to-control
+// ==========================================================================
+let liveFeedInterval = null;  // kept for fetchScreenshot() compatibility
+let mirrorTimer = null;
+let mirrorBusy = false;
+let mirrorObjectUrl = null;
+const MIRROR_INTERVAL_MS = 300; // ~3 fps
+
+async function pullMirrorFrame() {
+  if (mirrorBusy) return;
+  mirrorBusy = true;
+  try {
+    const res = await fetch('/api/mirror/frame?t=' + Date.now());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    phoneScreenshot.src = url;
+    phoneScreenshot.classList.remove('hidden');
+    screenFallback.classList.add('hidden');
+    if (mirrorObjectUrl) URL.revokeObjectURL(mirrorObjectUrl);
+    mirrorObjectUrl = url;
+  } catch (e) {
+    appendTerminalLine(`[MIRROR] Frame failed: ${e.message}`, 'adb-warning');
+  } finally {
+    mirrorBusy = false;
   }
-});
+}
+
+function startMirror() {
+  liveFeedText.textContent = 'STOP MIRROR';
+  btnLiveFeed.classList.add('active', 'btn-primary');
+  btnLiveFeed.classList.remove('btn-secondary');
+  phoneScreenContainer.classList.add('mirror-live');
+  appendTerminalLine('[MIRROR] Live mirror ON (~3 fps). Click the screen to tap, drag to swipe.', 'adb-info');
+  pullMirrorFrame();
+  mirrorTimer = setInterval(pullMirrorFrame, MIRROR_INTERVAL_MS);
+}
+
+function stopMirror() {
+  clearInterval(mirrorTimer);
+  mirrorTimer = null;
+  liveFeedText.textContent = 'LIVE MIRROR';
+  btnLiveFeed.classList.remove('active', 'btn-primary');
+  btnLiveFeed.classList.add('btn-secondary');
+  phoneScreenContainer.classList.remove('mirror-live');
+  appendTerminalLine('[MIRROR] Live mirror stopped.', 'system');
+}
+
+btnLiveFeed.addEventListener('click', () => (mirrorTimer ? stopMirror() : startMirror()));
+if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
+
+// Click -> tap, drag -> swipe (normalized coords against the rendered image box).
+(function wireMirrorInput() {
+  let down = null;
+  function norm(e) {
+    const r = phoneScreenshot.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return {
+      x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
+    };
+  }
+  phoneScreenshot.addEventListener('pointerdown', (e) => {
+    if (!mirrorTimer) return;
+    down = { pt: norm(e), t: Date.now() };
+  });
+  phoneScreenshot.addEventListener('pointerup', async (e) => {
+    if (!mirrorTimer || !down || !down.pt) { down = null; return; }
+    const up = norm(e);
+    const dist = up ? Math.hypot(up.x - down.pt.x, up.y - down.pt.y) : 0;
+    try {
+      if (dist > 0.04) {
+        await fetch('/api/mirror/swipe', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x1: down.pt.x, y1: down.pt.y, x2: up.x, y2: up.y, duration: Math.min(600, Date.now() - down.t) })
+        });
+      } else {
+        await fetch('/api/mirror/tap', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x: down.pt.x, y: down.pt.y })
+        });
+      }
+      setTimeout(pullMirrorFrame, 120); // refresh so the result shows fast
+    } catch (err) {
+      appendTerminalLine(`[MIRROR] Input failed: ${err.message}`, 'adb-error');
+    }
+    down = null;
+  });
+})();
 
 async function fetchScreenshot() {
   try {

@@ -1703,3 +1703,17 @@ body {
 .macro-step-row { display: grid; grid-template-columns: 1fr 88px 28px; gap: 6px; align-items: center; }
 .macro-step-row .step-del { color: var(--accent-red); }
 .macro-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ====================================================================== */
+/* LIVE MIRROR (tap-to-control)                                           */
+/* ====================================================================== */
+.phone-screen.mirror-live img {
+  object-fit: contain;          /* 1:1 coordinate mapping for taps */
+  cursor: crosshair;
+  touch-action: none;
+}
+.phone-screen.mirror-live {
+  outline: 1px solid var(--accent-cyan);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 24px rgba(0, 240, 255, 0.18);
+}

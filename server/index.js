@@ -62,6 +62,7 @@ import {
   executeMacro,
   validateMacro
 } from './macros.js';
+import { captureFrame, sendTap, sendSwipe, scaleToDevice } from './screenMirror.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -114,6 +115,8 @@ console.log(AUTH_TOKEN
 
 const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
 const screenLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+const mirrorLimiter = createRateLimiter({ windowMs: 60_000, max: 800 });   // ~10 fps frames
+const inputLimiter = createRateLimiter({ windowMs: 60_000, max: 240 });    // taps / swipes
 app.use('/api', apiLimiter.middleware);
 
 // Login: exchange the shared token for a client-side session. Reachable
@@ -219,6 +222,39 @@ app.get('/api/screen/current', screenLimiter.middleware, (req, res) => {
   }
   res.set('Cache-Control', 'no-store');
   res.type('png').sendFile(SCREENSHOT_PATH);
+});
+
+// ---- Live screen mirror + tap-to-control ---------------------------------
+app.get('/api/mirror/frame', mirrorLimiter.middleware, async (req, res) => {
+  const result = await captureFrame();
+  if (!result.success) return res.status(502).json({ error: result.error || 'capture failed' });
+  res.set('Cache-Control', 'no-store');
+  res.type('png').send(result.buffer);
+});
+
+app.post('/api/mirror/tap', inputLimiter.middleware, async (req, res) => {
+  try {
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    const { x, y } = scaleToDevice(req.body?.x, req.body?.y, diag.resolution);
+    await sendTap(x, y, diag.deviceId);
+    res.json({ success: true, x, y });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.post('/api/mirror/swipe', inputLimiter.middleware, async (req, res) => {
+  try {
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    const a = scaleToDevice(req.body?.x1, req.body?.y1, diag.resolution);
+    const b = scaleToDevice(req.body?.x2, req.body?.y2, diag.resolution);
+    await sendSwipe(a.x, a.y, b.x, b.y, req.body?.duration, diag.deviceId);
+    res.json({ success: true });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
 });
 
 // Unlock the phone now (Settings > "Test unlock"). Uses the saved PIN.
