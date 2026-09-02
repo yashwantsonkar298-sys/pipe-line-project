@@ -9,6 +9,9 @@
   const statusEl = document.getElementById('ai-status');
   if (!log || !input || !sendBtn) return;
 
+  let aiEnabled = false;
+  let hintShown = false;
+
   function addMsg(text, who) {
     const el = document.createElement('div');
     el.className = 'ai-msg ai-msg-' + who;
@@ -29,9 +32,24 @@
     }
   }
 
+  function applyEnabledState() {
+    input.disabled = !aiEnabled;
+    sendBtn.disabled = !aiEnabled;
+    input.placeholder = aiEnabled
+      ? "Message Vani… (e.g. 'mummy ko whatsapp karo')"
+      : 'Vani is off — add ANTHROPIC_API_KEY to enable';
+  }
+
   function send() {
     const text = input.value.trim();
     if (!text) return;
+    if (!aiEnabled) {
+      if (!hintShown) {
+        addMsg('Vani AI is off. Add ANTHROPIC_API_KEY to a .env file (see .env.example) and restart the server.', 'bot');
+        hintShown = true;
+      }
+      return;
+    }
     addMsg(text, 'user');
     input.value = '';
     setThinking(true);
@@ -59,7 +77,8 @@
         break;
       case 'ai_reply':
         setThinking(false);
-        if (data.reply) addMsg(data.reply, 'bot');
+        if (data.reply && !(data.disabled && hintShown)) addMsg(data.reply, 'bot');
+        if (data.disabled) hintShown = true;
         break;
       case 'ai_event':
         if (data.error && data.reply) { setThinking(false); addMsg(data.reply, 'bot'); }
@@ -67,15 +86,22 @@
     }
   });
 
-  // Show whether the server has an API key configured.
-  fetch('/api/ai/status')
-    .then((r) => r.json())
-    .then((s) => {
-      if (!statusEl) return;
-      statusEl.textContent = s.enabled
-        ? 'Vani online · ' + s.model
-        : 'Vani is disabled — set ANTHROPIC_API_KEY on the server to enable it.';
-      statusEl.classList.toggle('ai-status-off', !s.enabled);
-    })
-    .catch(() => {});
+  function refreshStatus() {
+    fetch('/api/ai/status')
+      .then((r) => r.json())
+      .then((s) => {
+        aiEnabled = Boolean(s.enabled);
+        applyEnabledState();
+        if (statusEl) {
+          statusEl.textContent = aiEnabled
+            ? 'Vani online · ' + s.model
+            : 'Vani is disabled — add ANTHROPIC_API_KEY to .env and restart.';
+          statusEl.classList.toggle('ai-status-off', !aiEnabled);
+        }
+      })
+      .catch(() => {});
+  }
+
+  applyEnabledState();
+  refreshStatus();
 })();

@@ -61,6 +61,16 @@ function buildActionCtx(config, session) {
  */
 export async function runAssistantText(message, session = {}) {
   const broadcast = _broadcast;
+
+  // AI not configured is a NORMAL state, not a pipeline failure. Reply softly
+  // in the chat panel and do not fire pipeline_start / pipeline_end (which the
+  // UI surfaces as a red "PIPELINE FAILED" toast).
+  if (!isAiEnabled()) {
+    const reply = 'Vani AI is off. Add ANTHROPIC_API_KEY to a .env file (see .env.example) and restart to enable it.';
+    broadcast({ type: 'ai_reply', reply, disabled: true });
+    return { ok: false, disabled: true, reply };
+  }
+
   const config = readJsonFile(CONFIG_FILE, { unlockPin: '', whatsappCoords: { x: 0.91, y: 0.55 } });
   broadcast({ type: 'pipeline_start', command: message });
   broadcast({ type: 'pipeline_step', step: 0, status: 'success', message: 'Routing to Vani (Claude)...' });

@@ -1597,3 +1597,23 @@ body {
   background: rgba(160, 100, 255, 0.22);
   box-shadow: 0 0 10px rgba(160, 100, 255, 0.4);
 }
+
+/* ====================================================================== */
+/* SETTINGS TOGGLE ROW                                                    */
+/* ====================================================================== */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.toggle-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-cyan);
+  cursor: pointer;
+}

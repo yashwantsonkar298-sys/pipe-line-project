@@ -23,6 +23,7 @@ export const RUNTIME_DIR = path.join(SERVER_DIR, '.runtime');
 
 export const DEFAULT_CONFIG = Object.freeze({
   unlockPin: '',
+  autoUnlock: false,
   whatsappCoords: { x: 0.91, y: 0.55 }
 });
 
@@ -32,6 +33,7 @@ export const CONFIG_SCHEMA = {
   additionalProperties: false,
   properties: {
     unlockPin: { type: 'string', pattern: '^[0-9]{0,16}$' },
+    autoUnlock: { type: 'boolean' },
     whatsappCoords: {
       type: 'object',
       additionalProperties: false,
@@ -72,6 +74,7 @@ export function readConfig() {
   const raw = readJson(CONFIG_FILE, {});
   return {
     unlockPin: typeof raw.unlockPin === 'string' ? raw.unlockPin : '',
+    autoUnlock: raw.autoUnlock === true,
     whatsappCoords: {
       x: Number(raw?.whatsappCoords?.x ?? DEFAULT_CONFIG.whatsappCoords.x),
       y: Number(raw?.whatsappCoords?.y ?? DEFAULT_CONFIG.whatsappCoords.y)
@@ -89,7 +92,8 @@ export function readPublicConfig() {
   return {
     whatsappCoords: cfg.whatsappCoords,
     unlockPin: '',
-    hasUnlockPin: Boolean(cfg.unlockPin)
+    hasUnlockPin: Boolean(cfg.unlockPin),
+    autoUnlock: cfg.autoUnlock
   };
 }
 
@@ -104,6 +108,7 @@ export function mergeConfig(body) {
     : current.unlockPin;
   return {
     unlockPin: pin,
+    autoUnlock: typeof body.autoUnlock === 'boolean' ? body.autoUnlock : current.autoUnlock,
     whatsappCoords: body.whatsappCoords ?? current.whatsappCoords
   };
 }

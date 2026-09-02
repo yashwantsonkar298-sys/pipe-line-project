@@ -287,8 +287,14 @@
               <div class="settings-group">
                 <h3>PHONE SECURITY</h3>
                 <label class="hud-label">Unlock Password (PIN)</label>
-                <input type="password" id="cfg-pin" placeholder="Enter device unlock PIN code" class="hud-input">
-                <span class="input-desc">Required to unlock PIN-protected lockscreen automatically.</span>
+                <input type="password" id="cfg-pin" placeholder="Enter device unlock PIN code" class="hud-input" autocomplete="off">
+                <span class="input-desc">Digits only. Used to unlock a PIN-protected lockscreen.</span>
+                <label class="toggle-row">
+                  <input type="checkbox" id="cfg-auto-unlock">
+                  <span>Auto-unlock phone when it connects over USB</span>
+                </label>
+                <span class="input-desc">On connect, if the phone is locked and a PIN is set above, NexusFlow unlocks it automatically.</span>
+                <button class="hud-btn btn-secondary btn-full btn-sm" id="btn-test-unlock" style="margin-top: 8px;">TEST UNLOCK NOW</button>
               </div>
 
               <div class="settings-group">

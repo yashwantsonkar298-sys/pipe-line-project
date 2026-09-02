@@ -15,7 +15,9 @@ import {
   setLogCallback,
   syncPhoneContacts,
   enableWirelessAdb,
-  disableWirelessAdb
+  disableWirelessAdb,
+  isPhoneLocked,
+  unlockPhone
 } from './adb.js';
 import { getDiagnostics, currentDeviceKey, invalidateDiagnostics } from './deviceState.js';
 import { JobQueue } from './jobQueue.js';
@@ -37,6 +39,7 @@ import {
   mergeConfig,
   readContacts,
   writeContacts,
+  readConfig,
   getAuthToken,
   getAllowedOrigins,
   RUNTIME_DIR,
@@ -52,6 +55,15 @@ import {
 } from './fileTransfer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Load a project-root .env (Node 20.6+) so ANTHROPIC_API_KEY /
+// NEXUSFLOW_AUTH_TOKEN / PORT can live in a file instead of the shell.
+// Real environment variables always win; a missing .env is a no-op.
+try {
+  process.loadEnvFile(path.join(__dirname, '..', '.env'));
+  console.log('[CONFIG] Loaded .env');
+} catch { /* no .env - fine */ }
+
 const PORT = process.env.PORT || 3000;
 
 // Setup database file paths
@@ -198,6 +210,24 @@ app.get('/api/screen/current', screenLimiter.middleware, (req, res) => {
   }
   res.set('Cache-Control', 'no-store');
   res.type('png').sendFile(SCREENSHOT_PATH);
+});
+
+// Unlock the phone now (Settings > "Test unlock"). Uses the saved PIN.
+app.post('/api/unlock', async (req, res) => {
+  try {
+    const cfg = readConfig();
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    const result = await new Promise((resolve, reject) => {
+      jobs.enqueue(diag.deviceId, async () => {
+        try { resolve(await unlockPhone(cfg.unlockPin)); } catch (e) { reject(e); }
+      }, { kind: 'unlock' });
+    });
+    invalidateDiagnostics();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
 });
 
 // FEATURE 3: Sync contacts from connected phone
@@ -617,6 +647,58 @@ function cancelPcShutdown() {
 configurePipeline({ broadcast, startPcShutdown });
 
 // ==========================================================================
+// Auto-unlock: when a phone connects over USB and Settings > Phone Security has
+// "auto-unlock" enabled + a PIN saved, unlock it once (retries a couple of
+// times, then waits for the next reconnect).
+// ==========================================================================
+let autoUnlockDeviceId = null;    // device we've handled this connection
+let autoUnlockAttempts = 0;
+const AUTO_UNLOCK_MAX_ATTEMPTS = 3;
+
+async function maybeAutoUnlock(diagnostics) {
+  if (!diagnostics || !diagnostics.connected || !diagnostics.deviceId) {
+    autoUnlockDeviceId = null;
+    autoUnlockAttempts = 0;
+    return;
+  }
+  // New device since last handled connection -> reset.
+  if (diagnostics.deviceId !== autoUnlockDeviceId) {
+    autoUnlockDeviceId = diagnostics.deviceId;
+    autoUnlockAttempts = 0;
+  }
+  if (autoUnlockAttempts >= AUTO_UNLOCK_MAX_ATTEMPTS) return;
+
+  const cfg = readConfig();
+  if (!cfg.autoUnlock || !cfg.unlockPin) return;
+
+  let locked;
+  try {
+    locked = await isPhoneLocked(diagnostics.deviceId);
+  } catch { return; }
+  if (!locked) {
+    if (autoUnlockAttempts === 0) {
+      broadcast({ type: 'adb_log', log: { type: 'adb-debug', message: '[AUTO-UNLOCK] Device already unlocked - nothing to do.' } });
+    }
+    autoUnlockAttempts = AUTO_UNLOCK_MAX_ATTEMPTS;
+    return;
+  }
+
+  autoUnlockAttempts += 1;
+  broadcast({ type: 'adb_log', log: { type: 'adb-info', message: `[AUTO-UNLOCK] Device locked - unlocking (attempt ${autoUnlockAttempts})...` } });
+  jobs.enqueue(diagnostics.deviceId, async () => {
+    try {
+      await unlockPhone(cfg.unlockPin);
+      invalidateDiagnostics();
+      broadcast({ type: 'adb_log', log: { type: 'adb-success', message: '[AUTO-UNLOCK] Phone unlocked.' } });
+      broadcast({ type: 'system_alert', message: 'Phone auto-unlocked on USB connect.' });
+      autoUnlockAttempts = AUTO_UNLOCK_MAX_ATTEMPTS; // done
+    } catch (e) {
+      broadcast({ type: 'adb_log', log: { type: 'adb-warning', message: `[AUTO-UNLOCK] Failed: ${e.message}` } });
+    }
+  }, { kind: 'auto_unlock' });
+}
+
+// ==========================================================================
 // Single server-side diagnostics poll: broadcasts device status to every client
 // AND raises the critical-battery alert. Replaces the old 30s poller + each
 // client polling every 5s (getDiagnostics() is cached + single-flight).
@@ -627,6 +709,8 @@ setInterval(async () => {
     invalidateDiagnostics(); // force a fresh probe on this tick
     const diagnostics = await getDiagnostics();
     broadcast({ type: 'diagnostics', data: diagnostics });
+
+    maybeAutoUnlock(diagnostics).catch(() => {});
 
     if (diagnostics && diagnostics.connected) {
       const isCritical = diagnostics.batteryLevel <= 15 || (diagnostics.batteryTemp && diagnostics.batteryTemp >= 40);

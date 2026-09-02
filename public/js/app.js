@@ -519,12 +519,18 @@ btnSaveContact.addEventListener('click', saveContact);
 // Settings Panel Form
 // ==========================================================================
 
+const cfgAutoUnlock = document.getElementById('cfg-auto-unlock');
+
 async function fetchConfig() {
   try {
     const res = await fetch('/api/config');
     configData = await res.json();
-    
-    cfgPinInput.value = configData.unlockPin || '';
+
+    // The server never sends the PIN back; leave the field blank (a placeholder
+    // note tells the user one is stored). Typing a new one replaces it.
+    cfgPinInput.value = '';
+    cfgPinInput.placeholder = configData.hasUnlockPin ? 'PIN saved — type to change' : 'Enter device unlock PIN code';
+    if (cfgAutoUnlock) cfgAutoUnlock.checked = Boolean(configData.autoUnlock);
     cfgWxInput.value = configData.whatsappCoords ? configData.whatsappCoords.x : 0.91;
     cfgWyInput.value = configData.whatsappCoords ? configData.whatsappCoords.y : 0.55;
   } catch (err) {
@@ -533,22 +539,32 @@ async function fetchConfig() {
 }
 
 async function saveConfig() {
-  configData.unlockPin = cfgPinInput.value.trim();
-  configData.whatsappCoords = {
-    x: parseFloat(cfgWxInput.value) || 0.91,
-    y: parseFloat(cfgWyInput.value) || 0.55
+  // Send ONLY schema-allowed keys. An empty PIN field keeps the stored one.
+  const body = {
+    whatsappCoords: {
+      x: parseFloat(cfgWxInput.value) || 0.91,
+      y: parseFloat(cfgWyInput.value) || 0.55
+    }
   };
+  const pin = cfgPinInput.value.trim();
+  if (pin) body.unlockPin = pin;
+  if (cfgAutoUnlock) body.autoUnlock = cfgAutoUnlock.checked;
 
   try {
     const res = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(configData)
+      body: JSON.stringify(body)
     });
-    
+
     if (res.ok) {
       appendTerminalLine('[SYSTEM] System configuration applied.', 'adb-success');
+      cfgPinInput.value = '';
+      await fetchConfig();
       alert('Properties saved successfully!');
+    } else {
+      const err = await res.json().catch(() => ({}));
+      alert('Save failed: ' + (err.error?.message || res.status));
     }
   } catch (err) {
     alert('Failed to apply properties.');
@@ -556,6 +572,30 @@ async function saveConfig() {
 }
 
 btnSaveConfig.addEventListener('click', saveConfig);
+
+const btnTestUnlock = document.getElementById('btn-test-unlock');
+if (btnTestUnlock) {
+  btnTestUnlock.addEventListener('click', async () => {
+    btnTestUnlock.disabled = true;
+    appendTerminalLine('[UNLOCK] Testing phone unlock...', 'system');
+    try {
+      const res = await fetch('/api/unlock', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        appendTerminalLine(
+          data.alreadyUnlocked ? '[UNLOCK] Phone was already unlocked.' : '[UNLOCK] Phone unlocked successfully.',
+          'adb-success'
+        );
+      } else {
+        appendTerminalLine(`[UNLOCK] Failed: ${data.error?.message || data.error || res.status}`, 'adb-error');
+      }
+    } catch (e) {
+      appendTerminalLine(`[UNLOCK] Failed: ${e.message}`, 'adb-error');
+    } finally {
+      btnTestUnlock.disabled = false;
+    }
+  });
+}
 
 // ==========================================================================
 // Tab Navigations (supports multiple tabs)
