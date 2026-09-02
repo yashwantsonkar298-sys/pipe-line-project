@@ -11,10 +11,9 @@ const BIN_DIR = path.join(__dirname, 'bin');
 const LOCAL_ADB_DIR = path.join(BIN_DIR, 'platform-tools');
 const LOCAL_ADB_PATH = path.join(LOCAL_ADB_DIR, 'adb.exe');
 
-let adbPath = 'adb'; // Default to system ADB
+let adbPath = 'adb';
 let isAdbReady = false;
 
-// Logger helper for streaming to UI
 let logStreamCallback = null;
 export function setLogCallback(callback) {
   logStreamCallback = callback;
@@ -27,13 +26,9 @@ function log(message, type = 'info') {
   }
 }
 
-/**
- * Downloads and extracts ADB if not present in path or locally.
- */
 export async function ensureAdbInstalled() {
   log('Checking ADB environment...', 'info');
-  
-  // 1. Check system ADB
+
   try {
     const { stdout } = await execAsync('adb version');
     log(`System ADB detected: ${stdout.trim().split('\n')[0]}`, 'success');
@@ -44,7 +39,6 @@ export async function ensureAdbInstalled() {
     log('System ADB not found in PATH. Checking local installation...', 'info');
   }
 
-  // 2. Check local ADB
   if (fs.existsSync(LOCAL_ADB_PATH)) {
     log(`Local ADB detected at: ${LOCAL_ADB_PATH}`, 'success');
     adbPath = LOCAL_ADB_PATH;
@@ -52,7 +46,6 @@ export async function ensureAdbInstalled() {
     return true;
   }
 
-  // 3. Download and extract local ADB
   log('Local ADB not found. Starting automatic download from Google servers...', 'info');
   const adbUrl = 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip';
   const zipPath = path.join(BIN_DIR, 'platform-tools.zip');
@@ -72,15 +65,12 @@ export async function ensureAdbInstalled() {
     fs.writeFileSync(zipPath, Buffer.from(buffer));
     log('Download completed. Extracting archive...', 'info');
 
-    // Extract using Windows PowerShell Expand-Archive (built-in, zero dependencies).
-    // execFile + argv array: no shell, paths passed as discrete arguments.
     await execFileAsync('powershell', [
       '-NoProfile', '-NonInteractive', '-Command',
       'Expand-Archive', '-Path', zipPath, '-DestinationPath', BIN_DIR, '-Force'
     ]);
     log('Archive extracted successfully.', 'success');
 
-    // Clean up zip
     if (fs.existsSync(zipPath)) {
       fs.unlinkSync(zipPath);
     }
@@ -100,14 +90,11 @@ export async function ensureAdbInstalled() {
   }
 }
 
-/**
- * Helper to run ADB command and return stdout
- */
 export async function runAdb(argsString) {
   if (!isAdbReady) {
     await ensureAdbInstalled();
   }
-  
+
   const cmd = `"${adbPath}" ${argsString}`;
   log(`Executing: ${cmd}`, 'debug');
   try {
@@ -122,17 +109,6 @@ export async function runAdb(argsString) {
   }
 }
 
-/**
- * Safe ADB invocation: pass an explicit argv array, run via execFile (NO shell).
- * User-influenced values are discrete arguments and can never break out into
- * cmd.exe. Use this for anything that carries text, contact names, package
- * names or PINs. `runAdb()` (string form) is retained only for fixed internal
- * command strings.
- *
- * @param {string[]} args
- * @param {{timeout?:number, maxBuffer?:number}} [opts]
- * @returns {Promise<string>} trimmed stdout
- */
 export async function runAdbArgs(args, opts = {}) {
   if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) {
     throw new TypeError('runAdbArgs expects an array of string arguments');
@@ -154,7 +130,6 @@ export async function runAdbArgs(args, opts = {}) {
   }
 }
 
-/** Reject a device serial that is not a plain identifier before it hits `-s`. */
 export function assertDeviceId(id) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9.:_-]+$/.test(id)) {
     throw new Error(`Invalid device id: ${JSON.stringify(id)}`);
@@ -162,7 +137,6 @@ export function assertDeviceId(id) {
   return id;
 }
 
-/** Android package name guard, e.g. com.whatsapp */
 export function assertPackageName(name) {
   if (typeof name !== 'string' || !/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/.test(name)) {
     throw new Error(`Invalid package name: ${JSON.stringify(name)}`);
@@ -170,7 +144,6 @@ export function assertPackageName(name) {
   return name;
 }
 
-/** Android component guard, e.g. com.whatsapp/.Main */
 export function assertComponent(component) {
   if (typeof component !== 'string' || !/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+\/[A-Za-z0-9_.]+$/.test(component)) {
     throw new Error(`Invalid component: ${JSON.stringify(component)}`);
@@ -178,25 +151,16 @@ export function assertComponent(component) {
   return component;
 }
 
-/**
- * Wrap arbitrary text as a single POSIX-shell-quoted token for the *device*
- * shell (`adb shell input text ...`). Combined with runAdbArgs (no host shell)
- * this makes `input text` injection-proof on both sides.
- */
 export function deviceShellQuote(text) {
   return `'${String(text).replace(/'/g, `'\\''`)}'`;
 }
 
-/**
- * Returns connected devices
- */
 export async function getDevices() {
   try {
     const output = await runAdb('devices');
     const lines = output.split('\n').map(line => line.trim()).filter(line => line);
     const devices = [];
-    
-    // First line is "List of devices attached"
+
     for (let i = 1; i < lines.length; i++) {
       const parts = lines[i].split('\t');
       if (parts.length >= 2) {
@@ -212,9 +176,6 @@ export async function getDevices() {
   }
 }
 
-/**
- * Fetches real-time status diagnostics of connected device
- */
 export async function getDeviceDiagnostics() {
   const devices = await getDevices();
   if (devices.length === 0) {
@@ -223,25 +184,21 @@ export async function getDeviceDiagnostics() {
 
   const deviceId = devices[0].id;
   try {
-    // Brand & Model
     const brand = await runAdb(`-s ${deviceId} shell getprop ro.product.brand`);
     const model = await runAdb(`-s ${deviceId} shell getprop ro.product.model`);
     const release = await runAdb(`-s ${deviceId} shell getprop ro.build.version.release`);
 
-    // Battery
     const batteryDump = await runAdb(`-s ${deviceId} shell dumpsys battery`);
     const batteryLevelMatch = batteryDump.match(/level:\s+(\d+)/);
     const batteryTempMatch = batteryDump.match(/temperature:\s+(\d+)/);
     const batteryStatusMatch = batteryDump.match(/status:\s+(\d+)/);
 
     const batteryLevel = batteryLevelMatch ? parseInt(batteryLevelMatch[1]) : null;
-    const batteryTemp = batteryTempMatch ? parseFloat(batteryTempMatch[1]) / 10 : null; // Dumpsys gives temp in tenths of degree C
-    
-    // Battery Status: 1 = Unknown, 2 = Charging, 3 = Discharging, 4 = Not Charging, 5 = Full
+    const batteryTemp = batteryTempMatch ? parseFloat(batteryTempMatch[1]) / 10 : null;
+
     const statusCodes = { 1: 'Unknown', 2: 'Charging', 3: 'Discharging', 4: 'Not Charging', 5: 'Full' };
     const batteryStatus = batteryStatusMatch ? statusCodes[batteryStatusMatch[1]] || 'Unknown' : 'Unknown';
 
-    // Resolution
     const sizeOutput = await runAdb(`-s ${deviceId} shell wm size`);
     const sizeMatch = sizeOutput.match(/Physical size:\s+(\d+x\d+)/);
     const resolution = sizeMatch ? sizeMatch[1] : 'Unknown';
@@ -266,22 +223,18 @@ export async function getDeviceDiagnostics() {
   }
 }
 
-/**
- * Captures screen and pulls image to public/screen.png
- */
 export async function captureScreen(outputPath) {
   const devices = await getDevices();
   if (devices.length === 0) {
     throw new Error('No device connected');
   }
   const deviceId = devices[0].id;
-  
+
   log('Taking screenshot of mobile screen...', 'info');
   const tempPhonePath = '/sdcard/nexus_temp.png';
-  
+
   await runAdb(`-s ${deviceId} shell screencap -p ${tempPhonePath}`);
-  
-  // Make sure output folder exists
+
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
@@ -293,13 +246,9 @@ export async function captureScreen(outputPath) {
   return true;
 }
 
-/**
- * Checks if mobile screen is active (on)
- */
 export async function isScreenOn(deviceId) {
   try {
     const output = await runAdb(`-s ${deviceId} shell dumpsys power`);
-    // Check for mHoldingDisplaySuspendBlocker=true or mInteractive=true or Display Power: state=ON
     const isInteractive = output.includes('mInteractive=true') || output.includes('Display Power: state=ON') || output.includes('mScreenOn=true');
     return isInteractive;
   } catch (e) {
@@ -307,19 +256,14 @@ export async function isScreenOn(deviceId) {
   }
 }
 
-/**
- * Checks if the phone's keyguard (lock screen) is currently showing
- */
 export async function isPhoneLocked(deviceId) {
   try {
     const output = await runAdb(`-s ${deviceId} shell dumpsys window`);
-    // Check multiple indicators for lock screen state
     const isShowing = output.includes('mDreamingLockscreen=true') ||
                       output.includes('mShowingLockscreen=true') ||
                       output.includes('isStatusBarKeyguard=true') ||
                       output.includes('showing=true');
-    
-    // Also check via keyguard service
+
     try {
       const kgOutput = await runAdb(`-s ${deviceId} shell dumpsys trust`);
       const deviceLocked = kgOutput.includes('deviceLocked=true');
@@ -328,15 +272,10 @@ export async function isPhoneLocked(deviceId) {
       return isShowing;
     }
   } catch (e) {
-    // If we can't determine, assume locked for safety
     return true;
   }
 }
 
-/**
- * Unlocks phone by waking screen, swiping, and typing PIN if needed.
- * Intelligently detects if the phone is already unlocked and skips if so.
- */
 export async function unlockPhone(pin) {
   const devices = await getDevices();
   if (devices.length === 0) {
@@ -346,7 +285,6 @@ export async function unlockPhone(pin) {
 
   log('Executing Phone Unlock pipeline...', 'info');
 
-  // 1. Wake screen if off
   const screenActive = await isScreenOn(deviceId);
   if (!screenActive) {
     log('Screen is currently OFF. Sending WAKEUP key...', 'info');
@@ -356,7 +294,6 @@ export async function unlockPhone(pin) {
     log('Screen is already ON.', 'info');
   }
 
-  // 2. CHECK IF PHONE IS ALREADY UNLOCKED
   const locked = await isPhoneLocked(deviceId);
   if (!locked) {
     log('Phone is already UNLOCKED! No action needed. Skipping unlock sequence.', 'success');
@@ -364,12 +301,11 @@ export async function unlockPhone(pin) {
   }
   log('Keyguard lockscreen is ACTIVE. Proceeding with unlock...', 'info');
 
-  // 3. Dismiss keyguard (swipe up)
   log('Dismissing keyguard lockscreen (swipe up)...', 'info');
   const sizeOutput = await runAdb(`-s ${deviceId} shell wm size`);
   const sizeMatch = sizeOutput.match(/Physical size:\s+(\d+)x(\d+)/);
   let startX = 500, startY = 1600, endX = 500, endY = 400;
-  
+
   if (sizeMatch) {
     const width = parseInt(sizeMatch[1]);
     const height = parseInt(sizeMatch[2]);
@@ -378,11 +314,10 @@ export async function unlockPhone(pin) {
     endX = Math.floor(width / 2);
     endY = Math.floor(height * 0.2);
   }
-  
+
   await runAdb(`-s ${deviceId} shell input swipe ${startX} ${startY} ${endX} ${endY} 250`);
   await new Promise(resolve => setTimeout(resolve, 700));
 
-  // 4. Input PIN if provided
   if (pin) {
     if (!/^[0-9]{3,16}$/.test(String(pin))) {
       throw new Error('Configured unlock PIN must be 3-16 digits.');
@@ -391,7 +326,7 @@ export async function unlockPhone(pin) {
     await runAdbArgs(['-s', assertDeviceId(deviceId), 'shell', 'input', 'text', String(pin)]);
     await new Promise(resolve => setTimeout(resolve, 300));
     log('Submitting PIN...', 'info');
-    await runAdbArgs(['-s', assertDeviceId(deviceId), 'shell', 'input', 'keyevent', '66']); // Enter key
+    await runAdbArgs(['-s', assertDeviceId(deviceId), 'shell', 'input', 'keyevent', '66']);
   } else {
     log('Unlock swipe completed (No PIN configured).', 'success');
   }
@@ -400,9 +335,6 @@ export async function unlockPhone(pin) {
   return { alreadyUnlocked: false };
 }
 
-/**
- * Initiates phone call
- */
 export async function makeCall(phoneNumber) {
   const devices = await getDevices();
   if (devices.length === 0) {
@@ -411,21 +343,17 @@ export async function makeCall(phoneNumber) {
   const deviceId = devices[0].id;
 
   log(`Initiating call pipeline to: ${phoneNumber}`, 'info');
-  
-  // Clean phone number (leave only digits and maybe a leading +)
+
   const cleanNumber = phoneNumber.replace(/[^0-9+]/g, '');
 
   try {
-    // Try to trigger CALL intent directly (places the call instantly)
     log(`Sending DIRECT_CALL intent...`, 'info');
     await runAdb(`-s ${deviceId} shell am start -a android.intent.action.CALL -d tel:${cleanNumber}`);
     log(`Direct call intent triggered successfully. Check phone screen.`, 'success');
   } catch (error) {
-    // If it fails (due to lack of system permissions for adb call), fall back to DIAL intent
     log(`Direct call intent failed or blocked. Retrying with DIAL intent...`, 'warning');
     await runAdb(`-s ${deviceId} shell am start -a android.intent.action.DIAL -d tel:${cleanNumber}`);
-    
-    // Simulate pressing the CALL dialer button (on most dialers, pressing KEYCODE_CALL triggers it)
+
     await new Promise(resolve => setTimeout(resolve, 1000));
     log(`Sending KEYCODE_CALL input event to dial number...`, 'info');
     await runAdb(`-s ${deviceId} shell input keyevent KEYCODE_CALL`);
@@ -434,9 +362,6 @@ export async function makeCall(phoneNumber) {
   return true;
 }
 
-/**
- * Automates WhatsApp messages
- */
 export async function sendWhatsAppMessage(phoneNumber, message, coords) {
   const devices = await getDevices();
   if (devices.length === 0) {
@@ -446,15 +371,12 @@ export async function sendWhatsAppMessage(phoneNumber, message, coords) {
 
   log(`Executing WhatsApp messaging pipeline for ${phoneNumber}...`, 'info');
 
-  // Formats number to WhatsApp standard: numeric country code + local number, no spaces or +
-  // E.g., if number doesn't start with country code, we ask user to write it, or default to 91 (India) if standard 10 digit
   let formattedNumber = phoneNumber.replace(/[^0-9]/g, '');
   if (formattedNumber.length === 10) {
-    formattedNumber = '91' + formattedNumber; // Default to India country code if 10-digit
+    formattedNumber = '91' + formattedNumber;
     log(`No country code specified. Defaulted to India (+91): ${formattedNumber}`, 'warning');
   }
 
-  // 1. Wake phone and unlock first
   const screenActive = await isScreenOn(deviceId);
   if (!screenActive) {
     log('Screen is OFF. Waking up device...', 'info');
@@ -462,43 +384,30 @@ export async function sendWhatsAppMessage(phoneNumber, message, coords) {
     await new Promise(resolve => setTimeout(resolve, 300));
   }
 
-  // 2. Open WhatsApp intent preloaded with message
   log('Launching WhatsApp conversation window...', 'info');
-  // Escape & and other URI characters for cmd
   const encodedText = encodeURIComponent(message);
   const whatsappUrl = `whatsapp://send?phone=${formattedNumber}&text=${encodedText}`;
-  
-  // Note: we wrap the url in double quotes to avoid shell breaking on '&'
+
   await runAdb(`-s ${deviceId} shell am start -a android.intent.action.VIEW -d "${whatsappUrl}"`);
-  
-  // 3. Wait for WhatsApp to load and focus input box
+
   log('Waiting for WhatsApp layout to render (3 seconds)...', 'info');
   await new Promise(resolve => setTimeout(resolve, 3000));
 
-  // 4. Click Send button.
-  // We can calculate coordinates if they are not explicitly provided.
-  // Standard Send button on WhatsApp compose screen is on the right side.
-  // Let's get actual resolution to make a smart guess.
   const sizeOutput = await runAdb(`-s ${deviceId} shell wm size`);
   const sizeMatch = sizeOutput.match(/Physical size:\s+(\d+)x(\d+)/);
-  
+
   let sendX = 990;
-  let sendY = 1250; // default for mid screen if keyboard is open
-  
+  let sendY = 1250;
+
   if (sizeMatch) {
     const width = parseInt(sizeMatch[1]);
     const height = parseInt(sizeMatch[2]);
-    
+
     if (coords && coords.x && coords.y) {
-      // Coords can be supplied in percentages (e.g. 0.9 for 90%)
       sendX = coords.x <= 1 ? Math.floor(width * coords.x) : coords.x;
       sendY = coords.y <= 1 ? Math.floor(height * coords.y) : coords.y;
       log(`Using user-calibrated click coordinates: X=${sendX}, Y=${sendY}`, 'info');
     } else {
-      // Default guess: typical WhatsApp send button coordinates (approx 91% width, 53% height when keyboard is open, or 92% width, 90% height when keyboard is closed)
-      // Usually, when opening via URL, the message is prefilled, keyboard opens automatically.
-      // So the send button is right above the keyboard on the right side.
-      // We default to 91% width, 55% height
       sendX = Math.floor(width * 0.91);
       sendY = Math.floor(height * 0.55);
       log(`Guessed send button coordinates: X=${sendX}, Y=${sendY} (based on ${width}x${height} screen)`, 'info');
@@ -507,26 +416,18 @@ export async function sendWhatsAppMessage(phoneNumber, message, coords) {
 
   log(`Simulating click on Send button at (${sendX}, ${sendY})...`, 'info');
   await runAdb(`-s ${deviceId} shell input tap ${sendX} ${sendY}`);
-  
-  // Wait a beat and try coordinate tap again as backup
+
   await new Promise(resolve => setTimeout(resolve, 500));
   await runAdb(`-s ${deviceId} shell input tap ${sendX} ${sendY}`);
 
-  // FEATURE 5: Intelligent Fallback — also try KEYCODE_ENTER
-  // On many WhatsApp layouts, pressing Enter while the text field is focused sends the message.
-  // This acts as a universal safety net regardless of screen coordinates.
   await new Promise(resolve => setTimeout(resolve, 400));
   log('Sending KEYCODE_ENTER as intelligent fallback to ensure delivery...', 'info');
   await runAdb(`-s ${deviceId} shell input keyevent 66`);
-  
+
   log('WhatsApp message command pipeline executed with multi-fallback.', 'success');
   return true;
 }
 
-/**
- * FEATURE 3: Syncs contacts from the connected Android phone via ADB content provider.
- * Reads from contacts content provider and returns parsed name+number pairs.
- */
 export async function syncPhoneContacts() {
   const devices = await getDevices();
   if (devices.length === 0) {
@@ -537,7 +438,6 @@ export async function syncPhoneContacts() {
   log('Starting phone contacts sync via ADB content provider...', 'info');
 
   try {
-    // Query contacts using Android content provider
     const output = await runAdb(
       `-s ${deviceId} shell content query --uri content://com.android.contacts/data/phones --projection display_name:data1`
     );
@@ -552,26 +452,22 @@ export async function syncPhoneContacts() {
     const seen = new Set();
 
     for (const line of lines) {
-      // Each line looks like: Row: 0 display_name=John, data1=+919876543210
       const nameMatch = line.match(/display_name=([^,]+)/);
       const numberMatch = line.match(/data1=([^,\s]+)/);
 
       if (nameMatch && numberMatch) {
         const name = nameMatch[1].trim();
         let number = numberMatch[1].trim().replace(/[^0-9+]/g, '');
-        
-        // Skip empty entries
+
         if (!name || !number || name === 'NULL' || number === 'NULL') continue;
-        
-        // Remove leading + and country code normalization
+
         if (number.startsWith('+')) {
-          number = number.substring(1); // Remove + sign
+          number = number.substring(1);
         }
         if (number.startsWith('91') && number.length === 12) {
-          number = number.substring(2); // Strip Indian country code for storage
+          number = number.substring(2);
         }
-        
-        // Deduplicate by name+number
+
         const key = `${name.toLowerCase()}_${number}`;
         if (!seen.has(key)) {
           seen.add(key);
@@ -592,10 +488,6 @@ export async function syncPhoneContacts() {
   }
 }
 
-/**
- * FEATURE 4: Enables ADB-over-WiFi (Wireless Mode).
- * After enabling, the phone can be controlled without USB cable.
- */
 export async function enableWirelessAdb() {
   const devices = await getDevices();
   if (devices.length === 0) {
@@ -606,22 +498,19 @@ export async function enableWirelessAdb() {
   log('Enabling wireless ADB mode...', 'info');
 
   try {
-    // 1. Get phone's Wi-Fi IP address
     const ipOutput = await runAdb(`-s ${deviceId} shell ip route`);
     const ipMatch = ipOutput.match(/src\s+(\d+\.\d+\.\d+\.\d+)/);
-    
+
     if (!ipMatch) {
       throw new Error('Could not determine device Wi-Fi IP address. Ensure phone is connected to WiFi.');
     }
     const phoneIp = ipMatch[1];
     log(`Device Wi-Fi IP detected: ${phoneIp}`, 'info');
 
-    // 2. Switch ADB to TCP/IP mode on port 5555
     log('Switching ADB transport to TCP/IP on port 5555...', 'info');
     await runAdb(`-s ${deviceId} tcpip 5555`);
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // 3. Connect to device wirelessly
     log(`Connecting to ${phoneIp}:5555 wirelessly...`, 'info');
     const connectResult = await runAdb(`connect ${phoneIp}:5555`);
     log(`Wireless connection result: ${connectResult}`, 'success');
@@ -638,9 +527,6 @@ export async function enableWirelessAdb() {
   }
 }
 
-/**
- * Disables wireless ADB and reverts to USB transport.
- */
 export async function disableWirelessAdb() {
   log('Disabling wireless ADB mode, reverting to USB transport...', 'info');
   try {
@@ -653,9 +539,6 @@ export async function disableWirelessAdb() {
   }
 }
 
-// ========================================================================
-// EXTENDED DEVICE CONTROL COMMANDS
-// ========================================================================
 
 async function getFirstDevice() {
   const devices = await getDevices();
@@ -663,7 +546,6 @@ async function getFirstDevice() {
   return devices[0].id;
 }
 
-/** Volume Up */
 export async function volumeUp() {
   const id = await getFirstDevice();
   log('Increasing volume...', 'info');
@@ -673,7 +555,6 @@ export async function volumeUp() {
   log('Volume increased.', 'success');
 }
 
-/** Volume Down */
 export async function volumeDown() {
   const id = await getFirstDevice();
   log('Decreasing volume...', 'info');
@@ -683,7 +564,6 @@ export async function volumeDown() {
   log('Volume decreased.', 'success');
 }
 
-/** Volume Mute Toggle */
 export async function volumeMute() {
   const id = await getFirstDevice();
   log('Toggling mute...', 'info');
@@ -691,7 +571,6 @@ export async function volumeMute() {
   log('Volume mute toggled.', 'success');
 }
 
-/** Set Screen Brightness (0-255) */
 export async function setBrightness(level) {
   const id = await getFirstDevice();
   const val = Math.max(0, Math.min(255, parseInt(level) || 128));
@@ -701,7 +580,6 @@ export async function setBrightness(level) {
   log(`Brightness set to ${val}.`, 'success');
 }
 
-/** Toggle Flashlight/Torch */
 export async function toggleFlashlight(state) {
   const id = await getFirstDevice();
   const onOff = state ? 'true' : 'false';
@@ -709,37 +587,17 @@ export async function toggleFlashlight(state) {
   try {
     await runAdb(`-s ${id} shell cmd statusbar expand-settings`);
     await new Promise(r => setTimeout(r, 500));
-    // Flashlight shell cmd (Android 6+)
     await runAdb(`-s ${id} shell "service call SurfaceFlinger 1015 i32 ${state ? 1 : 0}"`);
     log(`Flashlight ${state ? 'enabled' : 'disabled'}.`, 'success');
   } catch (e) {
-    // Alternative: Use keyevent or shell cmd
     log(`Flashlight toggle via keyevent fallback...`, 'warning');
     await runAdb(`-s ${id} shell input keyevent KEYCODE_HOME`);
   }
 }
 
-/** 
- * ========================================================================
- * DYNAMIC APP LAUNCHER ENGINE v4.0 — ZERO SIDE-EFFECTS
- * 
- * ROOT CAUSE FIX: The old 'monkey' tool was injecting a RANDOM touch/tap 
- * event into the app right after opening it, which was hitting search bars
- * and other UI elements — causing apps to go to search screens.
- * 
- * NEW APPROACH: Uses 'cmd package resolve-activity' to find the exact
- * launcher activity, then 'am start -n' to open it CLEANLY with zero
- * random events injected. Works on ALL Android 7+ devices.
- * ========================================================================
- */
 
-// Cache of resolved packages so we don't re-scan every time
 const resolvedPackageCache = {};
 
-/**
- * Resolves the launcher activity component for a package.
- * Returns the component string (e.g. "com.whatsapp/.Main") or null.
- */
 async function resolveLauncherActivity(deviceId, packageName) {
   assertDeviceId(deviceId);
   assertPackageName(packageName);
@@ -750,15 +608,13 @@ async function resolveLauncherActivity(deviceId, packageName) {
     );
     const output = (stdout || '') + '\n' + (stderr || '');
     const lines = output.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    
-    // The last line containing '/' is the component (e.g. "com.whatsapp/.Main")
+
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].includes('/') && !lines[i].includes('=')) {
         return lines[i];
       }
     }
   } catch (e) {
-    // Even on error, check stdout/stderr for the component
     const output = (e.stdout || '') + '\n' + (e.stderr || '');
     const lines = output.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -770,10 +626,6 @@ async function resolveLauncherActivity(deviceId, packageName) {
   return null;
 }
 
-/**
- * Checks if a package is installed on the device.
- * Returns true/false.
- */
 async function isPackageInstalled(deviceId, packageName) {
   assertDeviceId(deviceId);
   assertPackageName(packageName);
@@ -787,14 +639,9 @@ async function isPackageInstalled(deviceId, packageName) {
   }
 }
 
-/**
- * Attempts to launch a package CLEANLY using am start (no monkey).
- * Returns true if launched, false if package not found/can't launch.
- */
 async function tryLaunchPackage(deviceId, packageName) {
   assertDeviceId(deviceId);
   assertPackageName(packageName);
-  // Step 1: Resolve the exact launcher activity
   const component = await resolveLauncherActivity(deviceId, packageName);
   const componentIsSafe = component && /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+\/[A-Za-z0-9_.]+$/.test(component);
   if (component && !componentIsSafe) {
@@ -802,7 +649,6 @@ async function tryLaunchPackage(deviceId, packageName) {
   }
 
   if (componentIsSafe) {
-    // Step 2: Launch cleanly with am start — ZERO random events
     try {
       const { stdout, stderr } = await execFileAsync(adbPath,
         ['-s', deviceId, 'shell', 'am', 'start', '-n', component]
@@ -816,7 +662,6 @@ async function tryLaunchPackage(deviceId, packageName) {
       return true;
     } catch (e) {
       const output = (e.stdout || '') + '\n' + (e.stderr || '');
-      // am start often writes to stderr even on success — check for real errors
       if (output.includes('Starting:') || output.includes('Warning: Activity')) {
         log(`Launched (with warning): ${component}`, 'success');
         return true;
@@ -824,20 +669,16 @@ async function tryLaunchPackage(deviceId, packageName) {
       if (output.includes('Error:') || output.includes('does not exist')) {
         return false;
       }
-      // If no clear error, assume it launched (stderr noise is common)
       log(`Launched: ${component} (stderr present but no error)`, 'success');
       return true;
     }
   }
-  
-  // Step 3: If resolve failed, check if package even exists
+
   const installed = await isPackageInstalled(deviceId, packageName);
   if (!installed) {
-    return false; // Package not on this device
+    return false;
   }
-  
-  // Step 4: Package exists but resolve-activity failed — last resort fallback
-  // Use am start with the main intent and let Android figure it out
+
   try {
     const { stdout, stderr } = await execFileAsync(adbPath,
       ['-s', deviceId, 'shell', 'am', 'start',
@@ -855,19 +696,14 @@ async function tryLaunchPackage(deviceId, packageName) {
   }
 }
 
-/**
- * Scans all installed packages on the device and finds the best match
- * for a given app name using intelligent multi-keyword fuzzy matching.
- */
 async function findPackageOnDevice(deviceId, appName) {
-  // Check cache first
   if (resolvedPackageCache[appName]) {
     log(`Package cache hit: ${appName} -> ${resolvedPackageCache[appName]}`, 'info');
     return resolvedPackageCache[appName];
   }
 
   log(`Scanning device for package matching "${appName}"...`, 'info');
-  
+
   assertDeviceId(deviceId);
   let listOutput;
   try {
@@ -883,37 +719,32 @@ async function findPackageOnDevice(deviceId, appName) {
     .filter(l => l.length > 0);
 
   const searchName = appName.toLowerCase().replace(/\s+/g, '');
-  
-  // Score each package - higher is better match
+
   let bestMatch = null;
   let bestScore = 0;
 
   for (const pkg of allPackages) {
     const pkgLower = pkg.toLowerCase();
     let score = 0;
-    
-    // Exact app name in package (e.g., "calculator" in "com.vivo.calculator")
+
     if (pkgLower.includes(searchName)) {
       score += 100;
     }
-    
-    // Check individual words for multi-word app names (e.g., "play store" -> "vending")
+
     const words = appName.toLowerCase().split(/\s+/);
     for (const word of words) {
       if (word.length > 2 && pkgLower.includes(word)) {
         score += 30;
       }
     }
-    
-    // Penalize system/framework packages that are not user-facing apps
-    if (pkgLower.includes('provider') || pkgLower.includes('overlay') || 
+
+    if (pkgLower.includes('provider') || pkgLower.includes('overlay') ||
         pkgLower.includes('service') || pkgLower.includes('framework') ||
         pkgLower.includes('widget') || pkgLower.includes('plugin') ||
         pkgLower.includes('config') || pkgLower.includes('extension')) {
       score -= 50;
     }
-    
-    // Bonus for shorter package names (more likely to be the main app)
+
     if (score > 0) {
       score += Math.max(0, 30 - pkg.length);
     }
@@ -933,7 +764,6 @@ async function findPackageOnDevice(deviceId, appName) {
   return null;
 }
 
-/** Open a specific app by package name or common name */
 export async function openApp(appName) {
   if (typeof appName !== 'string' || !/^[A-Za-z0-9 ._-]{1,64}$/.test(appName.trim())) {
     throw new Error('App name may only contain letters, digits, spaces, dot, underscore and dash.');
@@ -941,13 +771,11 @@ export async function openApp(appName) {
   appName = appName.trim();
   const id = assertDeviceId(await getFirstDevice());
 
-  // Wake device if screen is off
   const screenActive = await isScreenOn(id);
   if (!screenActive) {
     log('Screen is OFF. Waking device...', 'info');
     await runAdb(`-s ${id} shell input keyevent KEYCODE_WAKEUP`);
     await new Promise(resolve => setTimeout(resolve, 800));
-    // Quick swipe to dismiss lock screen (no PIN)
     const sizeOutput = await runAdb(`-s ${id} shell wm size`);
     const sizeMatch = sizeOutput.match(/Physical size:\s+(\d+)x(\d+)/);
     if (sizeMatch) {
@@ -960,7 +788,6 @@ export async function openApp(appName) {
     await new Promise(resolve => setTimeout(resolve, 800));
   }
 
-  // LAYER 1: Static package map (covers common/known packages)
   const appMap = {
     'camera': ['com.android.camera', 'com.vivo.alphacamera', 'com.sec.android.app.camera', 'com.huawei.camera', 'com.oppo.camera', 'com.oneplus.camera', 'com.miui.camera'],
     'gallery': ['com.google.android.apps.photos', 'com.vivo.gallery', 'com.miui.gallery', 'com.sec.android.gallery3d', 'com.coloros.gallery3d'],
@@ -1005,19 +832,18 @@ export async function openApp(appName) {
     'jio': ['com.jio.media.jiobeats'],
     'notes': ['com.google.android.keep', 'com.android.notes'],
   };
-  
+
   const nameLower = appName.toLowerCase().trim();
   const candidatePackages = appMap[nameLower] || [];
-  
+
   log(`Opening app: "${appName}" | Candidates: ${candidatePackages.length > 0 ? candidatePackages.join(', ') : 'none (will use dynamic search)'}`, 'info');
-  
-  // LAYER 2: Try each candidate from static map
+
   for (const pkg of candidatePackages) {
     log(`Trying static package: ${pkg}...`, 'info');
     const launched = await tryLaunchPackage(id, pkg);
     if (launched) {
       log(`App "${appName}" launched successfully via ${pkg}.`, 'success');
-      resolvedPackageCache[nameLower] = pkg; // Cache for next time
+      resolvedPackageCache[nameLower] = pkg;
       return;
     }
   }
@@ -1025,10 +851,9 @@ export async function openApp(appName) {
   if (candidatePackages.length > 0) {
     log(`All static packages failed for "${appName}". Falling back to dynamic search...`, 'warning');
   }
-  
-  // LAYER 3: Dynamic package resolution from device
+
   const dynamicPkg = await findPackageOnDevice(id, appName);
-  
+
   if (dynamicPkg) {
     log(`Trying dynamically resolved package: ${dynamicPkg}...`, 'info');
     const launched = await tryLaunchPackage(id, dynamicPkg);
@@ -1038,7 +863,6 @@ export async function openApp(appName) {
     }
   }
 
-  // LAYER 4: Last resort - try using the app name directly as a package name
   if (nameLower.includes('.')) {
     log(`Trying "${nameLower}" as direct package name...`, 'info');
     try {
@@ -1051,11 +875,10 @@ export async function openApp(appName) {
       log(`"${nameLower}" is not a valid package name: ${e.message}`, 'warning');
     }
   }
-  
+
   throw new Error(`App "${appName}" could not be found or launched on this device. Package not installed.`);
 }
 
-/** Open a URL in default browser */
 export async function openUrl(url) {
   const id = assertDeviceId(await getFirstDevice());
   let raw = String(url ?? '').trim();
@@ -1077,7 +900,6 @@ export async function openUrl(url) {
   log(`URL opened in browser.`, 'success');
 }
 
-/** Toggle WiFi on/off */
 export async function toggleWifi(enable) {
   const id = await getFirstDevice();
   const state = enable ? 'enable' : 'disable';
@@ -1086,7 +908,6 @@ export async function toggleWifi(enable) {
   log(`WiFi ${state}d.`, 'success');
 }
 
-/** Toggle Bluetooth on/off */
 export async function toggleBluetooth(enable) {
   const id = await getFirstDevice();
   const state = enable ? 'enable' : 'disable';
@@ -1100,13 +921,11 @@ export async function toggleBluetooth(enable) {
   }
 }
 
-/** Take a photo using the camera */
 export async function takePhoto() {
   const id = await getFirstDevice();
   log('Opening camera and capturing photo...', 'info');
   await runAdb(`-s ${id} shell am start -a android.media.action.STILL_IMAGE_CAMERA`);
   await new Promise(r => setTimeout(r, 2500));
-  // Simulate shutter press
   await runAdb(`-s ${id} shell input keyevent KEYCODE_CAMERA`);
   await new Promise(r => setTimeout(r, 500));
   await runAdb(`-s ${id} shell input keyevent KEYCODE_FOCUS`);
@@ -1114,7 +933,6 @@ export async function takePhoto() {
   log('Photo captured!', 'success');
 }
 
-/** Play/Pause media */
 export async function mediaPlayPause() {
   const id = await getFirstDevice();
   log('Toggling media play/pause...', 'info');
@@ -1122,7 +940,6 @@ export async function mediaPlayPause() {
   log('Media play/pause toggled.', 'success');
 }
 
-/** Next Track */
 export async function mediaNext() {
   const id = await getFirstDevice();
   log('Skipping to next track...', 'info');
@@ -1130,7 +947,6 @@ export async function mediaNext() {
   log('Next track.', 'success');
 }
 
-/** Previous Track */
 export async function mediaPrevious() {
   const id = await getFirstDevice();
   log('Going to previous track...', 'info');
@@ -1138,7 +954,6 @@ export async function mediaPrevious() {
   log('Previous track.', 'success');
 }
 
-/** Press Home button */
 export async function pressHome() {
   const id = await getFirstDevice();
   log('Pressing HOME button...', 'info');
@@ -1146,7 +961,6 @@ export async function pressHome() {
   log('Home screen activated.', 'success');
 }
 
-/** Press Back button */
 export async function pressBack() {
   const id = await getFirstDevice();
   log('Pressing BACK button...', 'info');
@@ -1154,7 +968,6 @@ export async function pressBack() {
   log('Back pressed.', 'success');
 }
 
-/** Open recent apps */
 export async function openRecents() {
   const id = await getFirstDevice();
   log('Opening recent apps...', 'info');
@@ -1162,7 +975,6 @@ export async function openRecents() {
   log('Recent apps opened.', 'success');
 }
 
-/** Open notification shade */
 export async function openNotifications() {
   const id = await getFirstDevice();
   log('Pulling down notification shade...', 'info');
@@ -1170,7 +982,6 @@ export async function openNotifications() {
   log('Notification shade opened.', 'success');
 }
 
-/** Type text on the phone */
 export async function typeText(text) {
   const id = assertDeviceId(await getFirstDevice());
   const value = String(text ?? '');
@@ -1178,17 +989,12 @@ export async function typeText(text) {
     throw new Error('Text is too long to type (max 2000 characters).');
   }
   log(`Typing text: "${value}"...`, 'info');
-  // No host shell (runAdbArgs) + device-shell single-quoting = injection-proof.
   await runAdbArgs(['-s', id, 'shell', 'input', 'text', deviceShellQuote(value)]);
   log('Text typed on device.', 'success');
 }
 
 
-// ========================================================================
-// WHATSAPP INTERACTIVE PIPELINE COMMANDS
-// ========================================================================
 
-/** Open WhatsApp Chat without sending a message */
 export async function openWhatsAppChat(phoneNumber) {
   const id = await getFirstDevice();
   let formattedNumber = phoneNumber.replace(/[^0-9]/g, '');
@@ -1200,41 +1006,35 @@ export async function openWhatsAppChat(phoneNumber) {
   log('WhatsApp Chat opened.', 'success');
 }
 
-/** Tap the Send Button in WhatsApp */
 export async function tapWhatsAppSend() {
   const id = await getFirstDevice();
   log('Tapping WhatsApp Send button...', 'info');
-  // 1. Try hitting ENTER key (works on many devices)
   await runAdb(`-s ${id} shell input keyevent 66`);
   await new Promise(r => setTimeout(r, 200));
 
-  // 2. Try tapping coordinate (approximate Send button location with keyboard open)
   const sizeOutput = await runAdb(`-s ${id} shell wm size`);
   const sizeMatch = sizeOutput.match(/Physical size:\s+(\d+)x(\d+)/);
   if (sizeMatch) {
     const width = parseInt(sizeMatch[1]);
     const height = parseInt(sizeMatch[2]);
     const sendX = Math.floor(width * 0.91);
-    const sendY = Math.floor(height * 0.55); // Keyboard takes bottom half
+    const sendY = Math.floor(height * 0.55);
     await runAdb(`-s ${id} shell input tap ${sendX} ${sendY}`);
   }
   log('Message Sent trigger executed.', 'success');
 }
 
-/** Tap the Audio Call Button in WhatsApp */
 export async function tapWhatsAppCall() {
   const id = await getFirstDevice();
   log('Initiating WhatsApp Audio Call using Pro-Max UI Automator...', 'info');
-  
+
   try {
-    // Dump UI hierarchy to find the exact button
     await runAdb(`-s ${id} shell uiautomator dump /sdcard/window_dump.xml`);
     const xml = await runAdb(`-s ${id} shell cat /sdcard/window_dump.xml`);
-    
-    // Look for the "Voice call" or "Call" button via content-desc
+
     const callMatch = xml.match(/node[^>]+content-desc="Voice call"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i) ||
                       xml.match(/node[^>]+content-desc="Call"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i);
-                      
+
     if (callMatch) {
       const x1 = parseInt(callMatch[1]);
       const y1 = parseInt(callMatch[2]);
@@ -1242,16 +1042,14 @@ export async function tapWhatsAppCall() {
       const y2 = parseInt(callMatch[4]);
       const callX = Math.floor((x1 + x2) / 2);
       const callY = Math.floor((y1 + y2) / 2);
-      
+
       log(`Exact Call Button found at X:${callX} Y:${callY}`, 'success');
       await runAdb(`-s ${id} shell input tap ${callX} ${callY}`);
-      
-      // Check for confirmation popup "Start voice call?" by taking another quick dump after 1.5 seconds
+
       await new Promise(r => setTimeout(r, 1500));
       await runAdb(`-s ${id} shell uiautomator dump /sdcard/window_dump_confirm.xml`);
       const confirmXml = await runAdb(`-s ${id} shell cat /sdcard/window_dump_confirm.xml`);
-      
-      // Look for button with text="Call"
+
       const confirmMatch = confirmXml.match(/node[^>]+text="Call"[^>]+class="android.widget.Button"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i);
       if (confirmMatch) {
         const cx1 = parseInt(confirmMatch[1]);
@@ -1271,7 +1069,6 @@ export async function tapWhatsAppCall() {
       if (sizeMatch) {
         const width = parseInt(sizeMatch[1]);
         const height = parseInt(sizeMatch[2]);
-        // Safe fallback coordinate (avoids hitting the bottom camera button)
         await runAdb(`-s ${id} shell input tap ${Math.floor(width * 0.83)} ${Math.floor(height * 0.07)}`);
       }
     }
@@ -1280,18 +1077,16 @@ export async function tapWhatsAppCall() {
   }
 }
 
-/** Tap the Video Call Button in WhatsApp */
 export async function tapWhatsAppVideoCall() {
   const id = await getFirstDevice();
   log('Initiating WhatsApp Video Call using Pro-Max UI Automator...', 'info');
-  
+
   try {
     await runAdb(`-s ${id} shell uiautomator dump /sdcard/window_dump.xml`);
     const xml = await runAdb(`-s ${id} shell cat /sdcard/window_dump.xml`);
-    
-    // Look for the "Video call" button
+
     const callMatch = xml.match(/node[^>]+content-desc="Video call"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i);
-                      
+
     if (callMatch) {
       const x1 = parseInt(callMatch[1]);
       const y1 = parseInt(callMatch[2]);
@@ -1299,15 +1094,15 @@ export async function tapWhatsAppVideoCall() {
       const y2 = parseInt(callMatch[4]);
       const callX = Math.floor((x1 + x2) / 2);
       const callY = Math.floor((y1 + y2) / 2);
-      
+
       log(`Exact Video Call Button found at X:${callX} Y:${callY}`, 'success');
       await runAdb(`-s ${id} shell input tap ${callX} ${callY}`);
-      
+
       await new Promise(r => setTimeout(r, 1500));
       await runAdb(`-s ${id} shell uiautomator dump /sdcard/window_dump_confirm.xml`);
       const confirmXml = await runAdb(`-s ${id} shell cat /sdcard/window_dump_confirm.xml`);
       const confirmMatch = confirmXml.match(/node[^>]+text="Call"[^>]+class="android.widget.Button"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i);
-      
+
       if (confirmMatch) {
         const cx1 = parseInt(confirmMatch[1]);
         const cy1 = parseInt(confirmMatch[2]);
@@ -1326,53 +1121,48 @@ export async function tapWhatsAppVideoCall() {
   }
 }
 
-/** Perform live in-app search in WhatsApp for a contact */
 export async function searchAndOpenWhatsAppContact(contactName) {
   const id = assertDeviceId(await getFirstDevice());
   const name = String(contactName ?? '').slice(0, 80);
   log(`Performing live UI search in WhatsApp for: "${name}"...`, 'info');
-  
+
   try {
-    // 1. Launch WhatsApp main screen
     await runAdb(`-s ${id} shell am start -n com.whatsapp/.Main`);
     await new Promise(r => setTimeout(r, 2000));
-    
-    // 2. Find Search Icon (Handles both new Meta AI search bar and old magnifying glass)
+
     await runAdb(`-s ${id} shell uiautomator dump /sdcard/window_dump.xml`);
     const xml = await runAdb(`-s ${id} shell cat /sdcard/window_dump.xml`);
-    
+
     let searchMatch = xml.match(/node[^>]+resource-id="com.whatsapp:id\/search_bar_inner_layout"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i) ||
                       xml.match(/node[^>]+content-desc="Search"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i) ||
                       xml.match(/node[^>]+resource-id="com.whatsapp:id\/menuitem_search"[^>]+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/i);
-    
+
     if (!searchMatch) {
       log('Search icon not found on WhatsApp main screen.', 'error');
       return false;
     }
-    
+
     const sx = Math.floor((parseInt(searchMatch[1]) + parseInt(searchMatch[3])) / 2);
     const sy = Math.floor((parseInt(searchMatch[2]) + parseInt(searchMatch[4])) / 2);
     await runAdb(`-s ${id} shell input tap ${sx} ${sy}`);
     await new Promise(r => setTimeout(r, 1000));
-    
-    // 3. Type the name (no host shell + device-shell quoting = injection-proof)
+
     await runAdbArgs(['-s', id, 'shell', 'input', 'text', deviceShellQuote(name)]);
-    await new Promise(r => setTimeout(r, 2000)); // wait for search results to load
-    
-    // 4. Tap the first search result (usually just below the header)
+    await new Promise(r => setTimeout(r, 2000));
+
     const sizeOutput = await runAdb(`-s ${id} shell wm size`);
     const sizeMatch = sizeOutput.match(/Physical size:\s+(\d+)x(\d+)/);
     if (sizeMatch) {
       const width = parseInt(sizeMatch[1]);
       const height = parseInt(sizeMatch[2]);
-      
+
       const firstResultX = Math.floor(width / 2);
       const firstResultY = Math.floor(height * 0.20);
-      
+
       log(`Tapping first search result roughly at X:${firstResultX} Y:${firstResultY}`, 'info');
       await runAdb(`-s ${id} shell input tap ${firstResultX} ${firstResultY}`);
-      
-      await new Promise(r => setTimeout(r, 2500)); // Increased wait time to ensure chat opens fully before calling
+
+      await new Promise(r => setTimeout(r, 2500));
       return true;
     }
   } catch (error) {

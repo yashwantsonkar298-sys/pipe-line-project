@@ -17,3 +17,5 @@ public/camera_frame.png
 public/mirror_frame.png
 *.log
 dump_chat.xml
+
+implementation_plan nexus

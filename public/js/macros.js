@@ -1,8 +1,3 @@
-// ==========================================================================
-// Macros panel — list / run / build automation sequences.
-// Each step is a normal command string that runs through the NLP -> registry
-// pipeline server-side. Live progress arrives as `macro_step` WS events.
-// ==========================================================================
 (function () {
   const listEl = document.getElementById('macro-list');
   const editorEl = document.getElementById('macro-editor');
@@ -18,7 +13,7 @@
   let macros = [];
   let editingId = null;
   let loaded = false;
-  const running = {}; // macroId -> { card, stepEls[] }
+  const running = {};
 
   function toast(t, m, type) { if (typeof showToast === 'function') showToast(t, m, type); }
 
@@ -70,7 +65,6 @@
     }
   }
 
-  // ---- Editor ----------------------------------------------------------
   function addStepRow(step = { command: '', delay: 1000 }) {
     const row = document.createElement('div');
     row.className = 'macro-step-row';
@@ -140,7 +134,6 @@
     } catch (e) { toast('DELETE FAILED', e.message, 'error'); }
   }
 
-  // ---- Run + live progress -------------------------------------------
   async function runMacro(macro) {
     const card = listEl.querySelector(`.macro-card[data-id="${CSS.escape(macro.id)}"]`);
     const prog = card && card.querySelector('.macro-progress');

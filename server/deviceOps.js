@@ -1,8 +1,3 @@
-/**
- * NexusFlow device operations: APK install/uninstall + screen recording.
- * All ADB calls via execFile (no shell); package names are validated.
- */
-
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -32,9 +27,7 @@ function ensureRuntime() {
   return RUNTIME_DIR;
 }
 
-// ---- APK install / uninstall / list ------------------------------------
 
-/** Install (or reinstall) an APK from a local path. */
 export async function installApk(localApkPath, deviceId) {
   if (!fs.existsSync(localApkPath)) throw new Error('APK file not found');
   if (!/\.apk$/i.test(localApkPath)) throw new Error('Not an .apk file');
@@ -56,21 +49,17 @@ export async function uninstallPackage(pkg, deviceId) {
   throw new Error((stdout || '').trim() || 'Uninstall failed');
 }
 
-/** Third-party (user-installed) packages, sorted. */
 export async function listThirdPartyPackages(deviceId) {
   const { stdout } = await execFileAsync(adbPath(), [...deviceArgs(deviceId), 'shell', 'pm', 'list', 'packages', '-3'], { timeout: 15000 });
   return (stdout || '')
     .split('\n')
     .map((l) => l.trim().replace(/^package:/, ''))
-    // keep only real package names (dotted identifiers); drops warning lines
-    // like "Error: Shell does not have permission to access user 10".
     .filter((l) => /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/.test(l))
     .sort();
 }
 
-// ---- Screen recording -------------------------------------------------
 
-let recording = null; // { remotePath, startedAt, child, deviceId }
+let recording = null;
 
 export function isRecording() {
   return Boolean(recording);
@@ -79,7 +68,6 @@ export function isRecording() {
 export async function startRecording(deviceId) {
   if (recording) throw new Error('A recording is already in progress');
   const remotePath = `/sdcard/nx_rec_${Date.now()}.mp4`;
-  // screenrecord caps at 180s by default; --time-limit makes it explicit.
   const child = spawn(adbPath(), [...deviceArgs(deviceId), 'shell', 'screenrecord', '--time-limit', '180', remotePath], {
     stdio: 'ignore'
   });
@@ -92,11 +80,10 @@ export async function stopRecording() {
   if (!recording) throw new Error('No recording in progress');
   const { remotePath, deviceId, child } = recording;
 
-  // SIGINT to the on-device screenrecord so it finalises the mp4 header.
   try { await execFileAsync(adbPath(), [...deviceArgs(deviceId), 'shell', 'pkill', '-INT', 'screenrecord'], { timeout: 8000 }); }
-  catch { /* may already be gone */ }
-  try { child.kill(); } catch { /* ignore */ }
-  await new Promise((r) => setTimeout(r, 1500)); // let the file flush
+  catch {  }
+  try { child.kill(); } catch {  }
+  await new Promise((r) => setTimeout(r, 1500));
 
   ensureRuntime();
   const localPath = path.join(RUNTIME_DIR, path.basename(remotePath));

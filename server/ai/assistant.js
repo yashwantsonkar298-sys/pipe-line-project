@@ -1,17 +1,3 @@
-/**
- * Server-side agentic loop for the "Vani" assistant.
- *
- *  user text
- *    -> Claude (with the registry's tools)
- *    -> for each tool_use: runAction() through the SAME execution layer the NLP
- *       fast-path uses (validated params, job queue, destructive-action confirm)
- *    -> tool_result blocks back to Claude
- *    -> repeat until end_turn
- *
- * Conversation history lives on `session.aiHistory` - per WebSocket/HTTP
- * session, never a module global.
- */
-
 import Anthropic from '@anthropic-ai/sdk';
 
 import { getClient, AI_MODEL } from './client.js';
@@ -19,34 +5,24 @@ import { SYSTEM_PROMPT } from './systemPrompt.js';
 import { buildTools, intentForAiTool } from './tools.js';
 import { getAction, runAction } from '../actions/registry.js';
 
-const MAX_HISTORY_MESSAGES = 40; // ~20 turns
+const MAX_HISTORY_MESSAGES = 40;
 const MAX_TOOL_ROUNDS = 8;
 
 function trimHistory(history) {
   if (history.length > MAX_HISTORY_MESSAGES) {
     history.splice(0, history.length - MAX_HISTORY_MESSAGES);
   }
-  // History must start with a user message.
   while (history.length && history[0].role !== 'user') history.shift();
 }
 
 function toolResultText(outcome) {
   if (outcome.result && typeof outcome.result === 'object') {
-    try { return JSON.stringify(outcome.result).slice(0, 2000); } catch { /* fall through */ }
+    try { return JSON.stringify(outcome.result).slice(0, 2000); } catch {  }
   }
   return String(outcome.tts || 'done');
 }
 
-/**
- * @param {object} args
- * @param {string} args.text            user message
- * @param {object} args.session         { aiHistory?, confirm?, requireConfirm? }
- * @param {(e:object)=>void} [args.onEvent]  ai_delta / ai_reply events
- * @param {object} [args.actionCtx]     base ctx for runAction (config, broadcast, log, startPcShutdown, deviceId)
- * @returns {Promise<{ok:boolean, reply:string, actionsTaken?:Array, disabled?:boolean, error?:string, refusal?:boolean}>}
- */
 export async function runAssistant({ text, session = {}, onEvent = () => {}, actionCtx = {}, client }) {
-  // `client` undefined -> resolve the real one; `client` null -> force disabled.
   const anthropic = client === undefined ? getClient() : client;
   if (!anthropic) {
     const reply = 'AI is disabled on this server. Set ANTHROPIC_API_KEY to enable Vani.';
@@ -94,7 +70,6 @@ export async function runAssistant({ text, session = {}, onEvent = () => {}, act
 
       if (textOut) onEvent({ type: 'ai_delta', text: textOut });
 
-      // Execute every tool_use, collect ALL tool_result blocks into one user msg.
       const results = [];
       for (const tu of toolUses) {
         const intent = intentForAiTool(tu.name);
@@ -107,7 +82,6 @@ export async function runAssistant({ text, session = {}, onEvent = () => {}, act
         try {
           const outcome = await runAction(intent, input, {
             ...actionCtx,
-            // AI-initiated destructive actions ALWAYS go through confirmation.
             requireConfirm: Boolean(action.destructive),
             confirm: session.confirm
           });

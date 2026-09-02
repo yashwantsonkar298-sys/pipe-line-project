@@ -8,7 +8,6 @@ import { exec } from 'child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import multer from 'multer';
 
-// Import our custom modules
 import {
   ensureAdbInstalled,
   captureScreen,
@@ -74,21 +73,16 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Load a project-root .env (Node 20.6+) so ANTHROPIC_API_KEY /
-// NEXUSFLOW_AUTH_TOKEN / PORT can live in a file instead of the shell.
-// Real environment variables always win; a missing .env is a no-op.
 try {
   process.loadEnvFile(path.join(__dirname, '..', '.env'));
   console.log('[CONFIG] Loaded .env');
-} catch { /* no .env - fine */ }
+} catch {  }
 
 const PORT = process.env.PORT || 3000;
 
-// Setup database file paths
 const CONTACTS_FILE = path.join(__dirname, 'contacts.json');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
-// Initialize files if they don't exist
 if (!fs.existsSync(CONTACTS_FILE)) {
   fs.writeFileSync(CONTACTS_FILE, JSON.stringify([
     { id: '1', name: 'Mom', number: '9876543210' },
@@ -108,13 +102,6 @@ if (!fs.existsSync(CONFIG_FILE)) {
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
-// -------------------------------------------------------------------------
-// Access control (P0-1)
-//   NEXUSFLOW_AUTH_TOKEN set  -> every /api call needs `Authorization: Bearer`,
-//                                every WS upgrade needs `?token=`.
-//   not set (default)         -> loopback clients only; the LAN cannot reach
-//                                the API or the WebSocket at all.
-// -------------------------------------------------------------------------
 const AUTH_TOKEN = getAuthToken();
 const ALLOWED_ORIGINS = getAllowedOrigins(process.env, PORT);
 console.log(AUTH_TOKEN
@@ -123,12 +110,10 @@ console.log(AUTH_TOKEN
 
 const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
 const screenLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
-const mirrorLimiter = createRateLimiter({ windowMs: 60_000, max: 800 });   // ~10 fps frames
-const inputLimiter = createRateLimiter({ windowMs: 60_000, max: 900 });    // taps / swipes / wheel-scroll
+const mirrorLimiter = createRateLimiter({ windowMs: 60_000, max: 800 });
+const inputLimiter = createRateLimiter({ windowMs: 60_000, max: 900 });
 app.use('/api', apiLimiter.middleware);
 
-// Login: exchange the shared token for a client-side session. Reachable
-// without auth so a fresh browser can authenticate.
 app.post('/api/auth/login', express.json({ limit: '4kb' }), (req, res) => {
   if (!AUTH_TOKEN) return res.json({ ok: true, mode: 'local-only' });
   const supplied = typeof req.body?.token === 'string' ? req.body.token : '';
@@ -140,14 +125,13 @@ app.get('/api/auth/status', (req, res) => {
   res.json({ authRequired: Boolean(AUTH_TOKEN) });
 });
 
-// Liveness probe - no auth, no secrets. Useful for `curl`, monitors, CI.
 const BOOT_TIME = Date.now();
 app.get('/api/health', async (req, res) => {
   let device = null;
   try {
     const d = await getDiagnostics();
     device = d.connected ? { model: d.model, android: d.androidVersion, battery: d.batteryLevel } : null;
-  } catch { /* ignore */ }
+  } catch {  }
   res.json({
     status: 'ok',
     uptimeSeconds: Math.round((Date.now() - BOOT_TIME) / 1000),
@@ -158,12 +142,10 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// Everything else under /api requires auth (bearer) or a loopback client.
 app.use('/api', createHttpAccessMiddleware({ authToken: AUTH_TOKEN }));
 
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Global state for PC shutdown timer
 let shutdownTimer = null;
 let shutdownTimeLeft = 10;
 
@@ -174,7 +156,6 @@ function timingSafeStrEqual(a, b) {
   return timingSafeEqual(bufA, bufB);
 }
 
-// HTTP API Routes
 app.get('/api/contacts', (req, res) => {
   try {
     res.json(readContacts());
@@ -229,8 +210,6 @@ app.get('/api/diagnostics', async (req, res) => {
   }
 });
 
-// Capture a screenshot into the private runtime dir (NOT public/) and hand back
-// an authenticated URL. The PNG is never served by express.static.
 const SCREENSHOT_PATH = path.join(RUNTIME_DIR, 'screen.png');
 app.get('/api/screenshot', async (req, res) => {
   try {
@@ -250,7 +229,6 @@ app.get('/api/screen/current', screenLimiter.middleware, (req, res) => {
   res.type('png').sendFile(SCREENSHOT_PATH);
 });
 
-// ---- Live screen mirror + tap-to-control ---------------------------------
 app.get('/api/mirror/frame', mirrorLimiter.middleware, async (req, res) => {
   const result = await captureFrame();
   if (!result.success) return res.status(502).json({ error: result.error || 'capture failed' });
@@ -283,7 +261,6 @@ app.post('/api/mirror/swipe', inputLimiter.middleware, async (req, res) => {
   }
 });
 
-// Unlock the phone now (Settings > "Test unlock"). Uses the saved PIN.
 app.post('/api/unlock', async (req, res) => {
   try {
     const cfg = readConfig();
@@ -301,20 +278,18 @@ app.post('/api/unlock', async (req, res) => {
   }
 });
 
-// FEATURE 3: Sync contacts from connected phone
 app.post('/api/sync-contacts', async (req, res) => {
   try {
     const phoneContacts = await syncPhoneContacts();
-    
-    // Merge with existing contacts (avoid duplicates by number)
+
     let existing = [];
     try {
       existing = JSON.parse(fs.readFileSync(CONTACTS_FILE, 'utf8'));
-    } catch (e) { /* empty */ }
-    
+    } catch (e) {  }
+
     const existingNumbers = new Set(existing.map(c => c.number));
     let addedCount = 0;
-    
+
     for (const pc of phoneContacts) {
       if (!existingNumbers.has(pc.number)) {
         existing.push(pc);
@@ -322,11 +297,11 @@ app.post('/api/sync-contacts', async (req, res) => {
         addedCount++;
       }
     }
-    
+
     fs.writeFileSync(CONTACTS_FILE, JSON.stringify(existing, null, 2));
-    res.json({ 
-      success: true, 
-      totalSynced: phoneContacts.length, 
+    res.json({
+      success: true,
+      totalSynced: phoneContacts.length,
       newAdded: addedCount,
       totalContacts: existing.length
     });
@@ -335,7 +310,6 @@ app.post('/api/sync-contacts', async (req, res) => {
   }
 });
 
-// FEATURE 4: Wireless ADB toggle
 app.post('/api/wireless/enable', async (req, res) => {
   try {
     const result = await enableWirelessAdb();
@@ -354,7 +328,6 @@ app.post('/api/wireless/disable', async (req, res) => {
   }
 });
 
-// AI assistant (Vani)
 const aiLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
 app.get('/api/ai/status', (req, res) => {
@@ -366,8 +339,6 @@ app.post('/api/ai/chat', aiLimiter.middleware, async (req, res) => {
     const message = typeof req.body?.message === 'string' ? req.body.message : '';
     if (!message.trim()) return res.status(400).json({ error: 'message is required' });
     if (message.length > 4000) return res.status(400).json({ error: 'message too long' });
-    // HTTP chat is stateless and has no confirm channel: destructive actions are
-    // declined here. Use the WebSocket `ai_chat` path for a multi-turn session.
     const session = { aiHistory: [], requireConfirm: true, confirm: async () => false };
     const result = await runAssistantText(message, session);
     res.json({ reply: result.reply, ok: result.ok, actionsTaken: result.actionsTaken || [] });
@@ -376,7 +347,6 @@ app.post('/api/ai/chat', aiLimiter.middleware, async (req, res) => {
   }
 });
 
-// Job queue inspection
 app.get('/api/jobs', (req, res) => {
   res.json({ jobs: jobs.list({ limit: 100 }) });
 });
@@ -386,22 +356,17 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
   res.json({ success: cancelled });
 });
 
-// ==========================================================================
-// FILE TRANSFER SYSTEM (Phase 1)
-// ==========================================================================
 
-// Setup multer for file uploads
 const uploadsDir = path.join(__dirname, '../uploads');
 const downloadsDir = path.join(__dirname, '../downloads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
-const upload = multer({ 
+const upload = multer({
   dest: uploadsDir,
-  limits: { fileSize: 500 * 1024 * 1024 } // 500MB max
+  limits: { fileSize: 500 * 1024 * 1024 }
 });
 
-// Browse phone files
 app.get('/api/files/list', async (req, res) => {
   try {
     const phonePath = req.query.path || '/sdcard';
@@ -412,17 +377,14 @@ app.get('/api/files/list', async (req, res) => {
   }
 });
 
-// Upload file to phone (PC → Phone)
 app.post('/api/files/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided' });
     }
-    
+
     const phoneDest = req.body.destination || '/sdcard/Download';
 
-    // NEVER build a path from the client-supplied name: strip to a safe
-    // basename so "../../evil.sh" cannot escape uploadsDir.
     const safeName = path.basename(String(req.file.originalname || 'upload'))
       .replace(/[^A-Za-z0-9._-]/g, '_')
       .slice(0, 200) || 'upload';
@@ -432,40 +394,33 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     }
     fs.renameSync(req.file.path, renamedPath);
 
-    // Push to phone (pushFileToPhone re-validates phoneDest via normalizePhonePath)
     const result = await pushFileToPhone(renamedPath, phoneDest);
-    
-    // Clean up uploaded file from PC
-    try { fs.unlinkSync(renamedPath); } catch (e) { /* ignore */ }
-    
-    // Broadcast progress to all WS clients
+
+    try { fs.unlinkSync(renamedPath); } catch (e) {  }
+
     broadcast({ type: 'file_transfer_complete', action: 'upload', result });
-    
+
     res.json(result);
   } catch (error) {
-    // Clean up on error
     if (req.file && fs.existsSync(req.file.path)) {
-      try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+      try { fs.unlinkSync(req.file.path); } catch (e) {  }
     }
     res.status(500).json({ error: error.message });
   }
 });
 
-// Download file from phone (Phone → PC)
 app.get('/api/files/download', async (req, res) => {
   try {
     const phonePath = req.query.path;
     if (!phonePath) {
       return res.status(400).json({ error: 'No file path specified' });
     }
-    
+
     const result = await pullFileFromPhone(phonePath, downloadsDir);
-    
+
     if (result.success) {
-      // Send file to browser for download
       res.download(result.localPath, result.fileName, (err) => {
-        // Clean up after download
-        try { fs.unlinkSync(result.localPath); } catch (e) { /* ignore */ }
+        try { fs.unlinkSync(result.localPath); } catch (e) {  }
       });
     } else {
       res.status(500).json(result);
@@ -475,14 +430,13 @@ app.get('/api/files/download', async (req, res) => {
   }
 });
 
-// Delete file on phone
 app.delete('/api/files/delete', async (req, res) => {
   try {
     const { path: filePath, isDirectory } = req.body;
     if (!filePath) {
       return res.status(400).json({ error: 'No file path specified' });
     }
-    
+
     const result = await deletePhoneFile(filePath, isDirectory);
     broadcast({ type: 'file_transfer_complete', action: 'delete', result });
     res.json(result);
@@ -491,14 +445,13 @@ app.delete('/api/files/delete', async (req, res) => {
   }
 });
 
-// Create directory on phone
 app.post('/api/files/mkdir', async (req, res) => {
   try {
     const { path: dirPath } = req.body;
     if (!dirPath) {
       return res.status(400).json({ error: 'No directory path specified' });
     }
-    
+
     const result = await createPhoneDirectory(dirPath);
     res.json(result);
   } catch (error) {
@@ -506,7 +459,6 @@ app.post('/api/files/mkdir', async (req, res) => {
   }
 });
 
-// Get storage info
 app.get('/api/files/storage', async (req, res) => {
   try {
     const result = await getStorageInfo();
@@ -516,7 +468,6 @@ app.get('/api/files/storage', async (req, res) => {
   }
 });
 
-// ---- APK install / uninstall / list -----------------------------------
 app.post('/api/apps/install', upload.single('apk'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No APK provided' });
   const tmp = path.join(uploadsDir, `install_${Date.now()}.apk`);
@@ -529,8 +480,8 @@ app.post('/api/apps/install', upload.single('apk'), async (req, res) => {
   } catch (error) {
     sendSafeError(res, error);
   } finally {
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
-    if (req.file && fs.existsSync(req.file.path)) { try { fs.unlinkSync(req.file.path); } catch { /* ignore */ } }
+    try { fs.unlinkSync(tmp); } catch {  }
+    if (req.file && fs.existsSync(req.file.path)) { try { fs.unlinkSync(req.file.path); } catch {  } }
   }
 });
 
@@ -554,8 +505,7 @@ app.delete('/api/apps/:pkg', async (req, res) => {
   }
 });
 
-// ---- Screen recording ------------------------------------------------
-let lastRecording = null; // { path, fileName }
+let lastRecording = null;
 
 app.get('/api/record/status', (req, res) => res.json({ recording: isRecording() }));
 
@@ -587,13 +537,9 @@ app.get('/api/record/latest', screenLimiter.middleware, (req, res) => {
 });
 
 
-// Setup server and WebSockets
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-// Authorize every WebSocket upgrade the same way as /api: bearer token via
-// `?token=` when configured, otherwise loopback only. Also enforces an Origin
-// allowlist so a random web page cannot open a socket to the daemon.
 server.on('upgrade', (req, socket, head) => {
   const result = authorizeWebSocketUpgrade(req, {
     authToken: AUTH_TOKEN,
@@ -612,7 +558,6 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
-// Broadcast helper
 function broadcast(data) {
   const message = JSON.stringify(data);
   wss.clients.forEach(client => {
@@ -622,19 +567,14 @@ function broadcast(data) {
   });
 }
 
-// Connect ADB logs to WebSocket clients
 setLogCallback((logObj) => {
   broadcast({ type: 'adb_log', log: logObj });
 });
 
-// Per-device FIFO job queue: commands for one device run strictly one at a time
-// (different devices run concurrently), so overlapping WS/AI/macro commands no
-// longer race on the single ADB connection.
 const jobs = new JobQueue({
   onEvent: (event) => broadcast({ type: 'job_event', event })
 });
 
-/** Enqueue a natural-language command and return its job snapshot. */
 async function enqueueCommand(text, session, opts = {}) {
   const key = await currentDeviceKey();
   return jobs.enqueue(
@@ -644,11 +584,8 @@ async function enqueueCommand(text, session, opts = {}) {
   );
 }
 
-// A macro's steps are commands the user deliberately assembled, so they run
-// without per-step confirmation (SHUTDOWN still has its own 10s abort overlay).
 const MACRO_SESSION = { nlpContext: {}, requireConfirm: false };
 
-/** Enqueue a full macro run; each step flows through the normal NLP->registry path. */
 async function enqueueMacro(id) {
   const key = await currentDeviceKey();
   return jobs.enqueue(key, () => executeMacro(
@@ -658,7 +595,6 @@ async function enqueueMacro(id) {
   ), { kind: 'macro', id });
 }
 
-// ---- Macro routes -----------------------------------------------------------
 app.get('/api/macros', (req, res) => {
   res.json({ macros: getMacros() });
 });
@@ -699,14 +635,8 @@ wss.on('connection', (ws) => {
   const loopback = ws._loopback !== false;
   console.log(`[WS] Client connected (${loopback ? 'loopback' : 'remote'})`);
 
-  // Pending confirmation round-trips for THIS socket, keyed by request id.
   const pendingConfirms = new Map();
 
-  /**
-   * Ask the client to approve a destructive action. Resolves false on decline
-   * or after 45s of silence. Used for AI-initiated calls and every command
-   * from a non-loopback client.
-   */
   function confirm(summary) {
     const id = randomUUID();
     return new Promise((resolve) => {
@@ -723,10 +653,6 @@ wss.on('connection', (ws) => {
     });
   }
 
-  // Per-connection session: conversational NLP memory is isolated here so it is
-  // never shared across clients. Remote clients must confirm destructive actions;
-  // a local typed command keeps today's instant behaviour (shutdown still has
-  // its own 10s abort window).
   ws.session = {
     id: randomUUID(),
     nlpContext: { lastContact: null, pendingAction: null },
@@ -734,7 +660,6 @@ wss.on('connection', (ws) => {
     confirm
   };
 
-  // Send immediate ADB status update
   getDiagnostics().then(diagnostics => {
     ws.send(JSON.stringify({ type: 'diagnostics', data: diagnostics }));
   });
@@ -791,25 +716,21 @@ wss.on('connection', (ws) => {
   });
 });
 
-/**
- * Initiates 10-second PC Shutdown sequence with abort option
- */
 function startPcShutdown() {
-  cancelPcShutdown(); // Cancel any existing sequence
-  
+  cancelPcShutdown();
+
   shutdownTimeLeft = 10;
   broadcast({ type: 'shutdown_timer_start', seconds: shutdownTimeLeft });
-  
+
   shutdownTimer = setInterval(() => {
     shutdownTimeLeft--;
     broadcast({ type: 'shutdown_timer_tick', seconds: shutdownTimeLeft });
-    
+
     if (shutdownTimeLeft <= 0) {
       clearInterval(shutdownTimer);
       shutdownTimer = null;
       broadcast({ type: 'shutdown_timer_complete' });
-      
-      // Trigger actual OS shutdown
+
       console.log('[SYSTEM] Executing Windows PC Shutdown command...');
       exec('shutdown /s /t 0', (err) => {
         if (err) console.error('Shutdown failed', err);
@@ -818,25 +739,19 @@ function startPcShutdown() {
   }, 1000);
 }
 
-/**
- * Aborts a running PC shutdown sequence
- */
 function cancelPcShutdown() {
   if (shutdownTimer) {
     clearInterval(shutdownTimer);
     shutdownTimer = null;
-    
-    // Trigger abort command just in case standard shutdown timer got scheduled elsewhere
+
     exec('shutdown /a', (err) => {
-      // Ignore errors (usually happens if no shutdown is in progress)
     });
-    
+
     broadcast({ type: 'shutdown_timer_cancelled' });
     console.log('[SYSTEM] PC Shutdown sequence cancelled by user.');
   }
 }
 
-/** Resolve a macro by (fuzzy) name and enqueue it. Used by the AI `run_macro` tool. */
 async function runMacroByName(name) {
   const want = String(name || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
   const all = getMacros();
@@ -849,15 +764,9 @@ async function runMacroByName(name) {
   return { started: match.name };
 }
 
-// Give the command pipeline its transport + PC-shutdown trigger + macro runner.
 configurePipeline({ broadcast, startPcShutdown, runMacroByName });
 
-// ==========================================================================
-// Auto-unlock: when a phone connects over USB and Settings > Phone Security has
-// "auto-unlock" enabled + a PIN saved, unlock it once (retries a couple of
-// times, then waits for the next reconnect).
-// ==========================================================================
-let autoUnlockDeviceId = null;    // device we've handled this connection
+let autoUnlockDeviceId = null;
 let autoUnlockAttempts = 0;
 const AUTO_UNLOCK_MAX_ATTEMPTS = 3;
 
@@ -867,7 +776,6 @@ async function maybeAutoUnlock(diagnostics) {
     autoUnlockAttempts = 0;
     return;
   }
-  // New device since last handled connection -> reset.
   if (diagnostics.deviceId !== autoUnlockDeviceId) {
     autoUnlockDeviceId = diagnostics.deviceId;
     autoUnlockAttempts = 0;
@@ -897,22 +805,17 @@ async function maybeAutoUnlock(diagnostics) {
       invalidateDiagnostics();
       broadcast({ type: 'adb_log', log: { type: 'adb-success', message: '[AUTO-UNLOCK] Phone unlocked.' } });
       broadcast({ type: 'system_alert', message: 'Phone auto-unlocked on USB connect.' });
-      autoUnlockAttempts = AUTO_UNLOCK_MAX_ATTEMPTS; // done
+      autoUnlockAttempts = AUTO_UNLOCK_MAX_ATTEMPTS;
     } catch (e) {
       broadcast({ type: 'adb_log', log: { type: 'adb-warning', message: `[AUTO-UNLOCK] Failed: ${e.message}` } });
     }
   }, { kind: 'auto_unlock' });
 }
 
-// ==========================================================================
-// Single server-side diagnostics poll: broadcasts device status to every client
-// AND raises the critical-battery alert. Replaces the old 30s poller + each
-// client polling every 5s (getDiagnostics() is cached + single-flight).
-// ==========================================================================
 let lastAlertTime = 0;
 const diagnosticsPoll = setInterval(async () => {
   try {
-    invalidateDiagnostics(); // force a fresh probe on this tick
+    invalidateDiagnostics();
     const diagnostics = await getDiagnostics();
     broadcast({ type: 'diagnostics', data: diagnostics });
 
@@ -931,17 +834,13 @@ const diagnosticsPoll = setInterval(async () => {
       }
     }
   } catch (e) {
-    // Ignore errors for background poller
   }
 }, 5000);
 
-// Boot up
 server.listen(PORT, () => {
   console.log(`\n[SERVER] NexusFlow v7.5 Pro-Max Running at http://localhost:${PORT}`);
   ensureAdbInstalled().catch(console.error);
 
-  // Auto-launch Chrome for Web Speech API support. Opt out with
-  // NEXUSFLOW_NO_BROWSER=1 (tests, headless hosts, or personal preference).
   if (process.env.NEXUSFLOW_NO_BROWSER === '1' || process.platform !== 'win32') return;
   exec(`start chrome http://localhost:${PORT}`, (err) => {
     if (err) {
@@ -952,10 +851,6 @@ server.listen(PORT, () => {
   });
 });
 
-// ==========================================================================
-// Graceful shutdown: stop the poller, stop accepting connections, give a
-// running job up to 4s to finish, then close sockets and exit.
-// ==========================================================================
 let shuttingDown = false;
 function shutdown(signal) {
   if (shuttingDown) return;
@@ -966,7 +861,7 @@ function shutdown(signal) {
 
   const deadline = Date.now() + 4000;
   const finish = () => {
-    for (const ws of wss.clients) { try { ws.close(1001, 'server shutting down'); } catch { /* ignore */ } }
+    for (const ws of wss.clients) { try { ws.close(1001, 'server shutting down'); } catch {  } }
     server.close(() => { console.log('[SERVER] Closed. Bye.'); process.exit(0); });
     setTimeout(() => process.exit(0), 1500).unref();
   };

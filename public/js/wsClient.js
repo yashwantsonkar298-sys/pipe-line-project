@@ -1,17 +1,3 @@
-// ==========================================================================
-// Reconnecting WebSocket client.
-//
-// window.NexusWS behaves like a WebSocket for the rest of the app:
-//   NexusWS.send(obj | string)              - queued while disconnected
-//   NexusWS.addEventListener('message', fn)
-//   NexusWS.addEventListener('open', fn)    - fires on every (re)connect
-//   NexusWS.addEventListener('close', fn)   - fires on every drop
-//   NexusWS.addEventListener('reconnecting', fn) - fires before a retry
-//   NexusWS.readyState
-//
-// Reconnects with exponential backoff + jitter (250ms -> 8s cap). Messages
-// sent while down are buffered and flushed on reconnect.
-// ==========================================================================
 (function () {
   const MAX_BACKOFF = 8000;
   const listeners = { message: [], open: [], close: [], reconnecting: [] };
@@ -34,7 +20,7 @@
     try {
       const token = sessionStorage.getItem('nx_token');
       if (token) url += '?token=' + encodeURIComponent(token);
-    } catch { /* sessionStorage blocked - fine */ }
+    } catch {  }
     return url;
   }
 
@@ -63,7 +49,7 @@
     });
 
     ws.addEventListener('error', () => {
-      try { ws.close(); } catch { /* ignore */ }
+      try { ws.close(); } catch {  }
     });
   }
 
@@ -89,7 +75,7 @@
     removeEventListener(type, fn) {
       if (listeners[type]) listeners[type] = listeners[type].filter((f) => f !== fn);
     },
-    close() { manualClose = true; if (ws) { try { ws.close(); } catch { /* ignore */ } } }
+    close() { manualClose = true; if (ws) { try { ws.close(); } catch {  } } }
   };
 
   connect();

@@ -1,12 +1,3 @@
-/**
- * NexusFlow command pipeline.
- *
- * Extracted from index.js so it can be imported and tested without booting the
- * HTTP server. `configurePipeline()` injects the transport (broadcast) and the
- * PC-shutdown trigger; `runCommandText()` is the single entry point shared by
- * the WebSocket command handler, macros and the AI assistant.
- */
-
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -21,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONTACTS_FILE = path.join(__dirname, 'contacts.json');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
-const STEP_DELAY_MS = 120; // brief pause so the pipeline visualiser animates
+const STEP_DELAY_MS = 120;
 
 let _broadcast = () => {};
 let _startPcShutdown = () => {
@@ -45,7 +36,6 @@ function readJsonFile(file, fallback) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Base ctx passed to runAction / the AI assistant. */
 function buildActionCtx(config, session) {
   return {
     config,
@@ -58,16 +48,9 @@ function buildActionCtx(config, session) {
   };
 }
 
-/**
- * Hand a message to the Vani assistant (Claude tool-use loop). Emits the same
- * pipeline_* events so the visualiser reflects AI-driven work too.
- */
 export async function runAssistantText(message, session = {}) {
   const broadcast = _broadcast;
 
-  // AI not configured is a NORMAL state, not a pipeline failure. Reply softly
-  // in the chat panel and do not fire pipeline_start / pipeline_end (which the
-  // UI surfaces as a red "PIPELINE FAILED" toast).
   if (!isAiEnabled()) {
     const reply = 'Vani AI is off. Add ANTHROPIC_API_KEY to a .env file (see .env.example) and restart to enable it.';
     broadcast({ type: 'ai_reply', reply, disabled: true });
@@ -94,21 +77,12 @@ export async function runAssistantText(message, session = {}) {
   return result;
 }
 
-/**
- * Parse + execute one natural-language command.
- *
- * @param {string} commandText
- * @param {object} [session]  { id?, requireConfirm?, confirm?, nlpContext?, aiHistory? }
- * @param {object} [opts]     { alternatives?: string[], source?: 'voice'|'text' }
- * @returns {Promise<{ok:boolean, intent:string, tts?:string, error?:string, skipped?:boolean}>}
- */
 export async function runCommandText(commandText, session = {}, opts = {}) {
   const broadcast = _broadcast;
   const trimmed = String(commandText || '').trim();
   const altList = Array.isArray(opts.alternatives) ? opts.alternatives.filter((s) => typeof s === 'string' && s.trim()) : [];
   const fromVoice = opts.source === 'voice';
 
-  // Explicit AI escape hatch: "ai: <question>" always goes to Vani.
   if (/^ai\s*:/i.test(trimmed)) {
     const r = await runAssistantText(trimmed.replace(/^ai\s*:/i, '').trim(), session);
     return { ok: r.ok, intent: 'AI', tts: r.reply, error: r.ok ? undefined : r.error };
@@ -119,7 +93,6 @@ export async function runCommandText(commandText, session = {}, opts = {}) {
   const contacts = readJsonFile(CONTACTS_FILE, []);
   const config = readJsonFile(CONFIG_FILE, { unlockPin: '', whatsappCoords: { x: 0.91, y: 0.55 } });
 
-  // Step 0 - intent extraction (over every speech candidate, best first)
   broadcast({ type: 'pipeline_step', step: 0, status: 'pending', message: 'Parsing natural language intent...' });
   await wait(STEP_DELAY_MS);
 
@@ -137,7 +110,6 @@ export async function runCommandText(commandText, session = {}, opts = {}) {
   }
 
   if (parsed.intent === 'UNKNOWN') {
-    // Deterministic parser missed - escalate to Vani if the AI is configured.
     if (isAiEnabled()) {
       broadcast({ type: 'pipeline_step', step: 0, status: 'success', message: 'NLP miss - escalating to Vani (Claude)...' });
       const aiText = (fromVoice && tried.length > 1)
@@ -170,7 +142,6 @@ export async function runCommandText(commandText, session = {}, opts = {}) {
     message: `Intent detected: ${parsed.intent}. Pipeline: [${(parsed.pipeline || []).join(' ➔ ')}]`
   });
 
-  // Step 1 - parameter resolution
   broadcast({ type: 'pipeline_step', step: 1, status: 'pending', message: 'Verifying command parameters...' });
   await wait(STEP_DELAY_MS);
 
@@ -188,7 +159,6 @@ export async function runCommandText(commandText, session = {}, opts = {}) {
       : `Parameters resolved for ${parsed.intent}`
   });
 
-  // Step 2 - endpoint handshake (skipped for PC-local / no-device actions)
   broadcast({ type: 'pipeline_step', step: 2, status: 'pending', message: 'Checking execution endpoint state...' });
   if (action?.local || action?.readOnly) {
     broadcast({ type: 'pipeline_step', step: 2, status: 'success', message: 'Local endpoint online. Proceeding...' });
@@ -212,13 +182,11 @@ export async function runCommandText(commandText, session = {}, opts = {}) {
     });
   }
 
-  // Step 3 - compile
   broadcast({ type: 'pipeline_step', step: 3, status: 'pending', message: 'Compiling automation script...' });
   await wait(STEP_DELAY_MS);
   const summary = action?.summary ? action.summary(parsed.details) : parsed.intent;
   broadcast({ type: 'pipeline_step', step: 3, status: 'success', message: `Script compiled: ${summary}` });
 
-  // Step 4 - execute via the Action Registry
   broadcast({ type: 'pipeline_step', step: 4, status: 'pending', message: 'Executing instruction pipeline...' });
 
   const ctx = buildActionCtx(config, session);
@@ -240,7 +208,7 @@ export async function runCommandText(commandText, session = {}, opts = {}) {
         try {
           const diagnostics = await getDeviceDiagnostics();
           broadcast({ type: 'diagnostics', data: diagnostics });
-        } catch { /* background refresh only */ }
+        } catch {  }
       }, 4000);
     }
 

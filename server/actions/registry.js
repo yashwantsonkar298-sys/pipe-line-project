@@ -1,24 +1,3 @@
-/**
- * NexusFlow Action Registry
- * -------------------------
- * The single execution layer. Both the deterministic NLP fast-path
- * (`parseCommand` -> intent) and the Claude assistant (tool-use) dispatch
- * through `runAction`, so validation, confirmation, logging and the job queue
- * behave identically no matter who initiated the command.
- *
- * Each entry:
- *   destructive : requires user confirmation when the caller is the AI or a
- *                 non-loopback client (see ctx.requireConfirm).
- *   local       : PC-only action, no Android device needed.
- *   readOnly    : never mutates device/PC state (safe to expose + auto-run).
- *   params      : JSON-schema `properties` map (validated via security.js).
- *   required    : required param names (used for the Claude tool schema).
- *   aiName      : snake_case tool name exposed to Claude. Omitted => not a tool.
- *   run(params, ctx) : thin wrapper over an existing server/adb.js export.
- *   tts(params)      : spoken confirmation string.
- *   summary(params)  : one-line description shown in the confirm prompt.
- */
-
 import { assertJsonSchema } from '../security.js';
 import {
   unlockPhone,
@@ -55,7 +34,6 @@ const numberParam = { type: 'string', pattern: '^\\+?[0-9]{3,15}$' };
 const messageParam = { type: 'string', minLength: 1, maxLength: 1000 };
 
 export const ACTIONS = {
-  // ---- PC (local) -------------------------------------------------------
   SHUTDOWN: {
     destructive: true,
     local: true,
@@ -73,7 +51,6 @@ export const ACTIONS = {
     tts: () => 'Warning! Initiating computer shutdown sequence. You have 10 seconds to abort.'
   },
 
-  // ---- Phone: destructive --------------------------------------------------
   UNLOCK: {
     destructive: true,
     params: {},
@@ -171,7 +148,6 @@ export const ACTIONS = {
     tts: (p) => `Aap ${p.name || 'ko'} audio call karna chahte hain ya video call?`
   },
 
-  // ---- Phone: safe device controls --------------------------------------
   VOLUME_UP: {
     destructive: false, params: {}, aiName: 'volume_up',
     description: 'Increase the phone media volume.',
@@ -312,7 +288,6 @@ export const ACTIONS = {
     tts: (p) => `Running the ${p.name} macro.`
   },
 
-  // ---- Sequences (not exposed to the AI) -------------------------------
   GOD_MODE: {
     destructive: true,
     params: {},
@@ -338,17 +313,14 @@ export const ACTIONS = {
   }
 };
 
-/** @returns {object|undefined} */
 export function getAction(name) {
   return ACTIONS[name];
 }
 
-/** @returns {string[]} every registered intent name */
 export function listActionNames() {
   return Object.keys(ACTIONS);
 }
 
-/** intent name <-> Claude tool name */
 export function aiToolNameFor(intent) {
   return ACTIONS[intent]?.aiName;
 }
@@ -359,10 +331,6 @@ export function intentForAiTool(toolName) {
   return undefined;
 }
 
-/**
- * Build the Anthropic `tools` array from every action that opts in via `aiName`.
- * @returns {Array<{name:string, description:string, strict:boolean, input_schema:object}>}
- */
 export function listAiTools() {
   const tools = [];
   for (const action of Object.values(ACTIONS)) {
@@ -383,30 +351,18 @@ export function listAiTools() {
   return tools;
 }
 
-/**
- * Validate + (optionally) confirm + execute an action.
- *
- * @param {string} name  registry intent name
- * @param {object} params
- * @param {object} ctx    { config, broadcast, log, deviceId, startPcShutdown,
- *                          confirm?: (summary:string)=>Promise<boolean>,
- *                          requireConfirm?: boolean }
- * @returns {Promise<{ok:boolean, skipped?:boolean, result?:any, tts?:string, intent:string}>}
- */
 export async function runAction(name, params = {}, ctx = {}) {
   const action = ACTIONS[name];
   if (!action) {
     throw new Error(`Unknown action: ${name}`);
   }
 
-  // Validate params against the same schema Claude sees.
   assertJsonSchema(params ?? {}, {
     type: 'object',
     properties: action.params || {},
     additionalProperties: true
   });
 
-  // Confirmation gate for destructive actions from the AI / remote clients.
   if (action.destructive && ctx.requireConfirm && typeof ctx.confirm === 'function') {
     const summary = action.summary ? action.summary(params) : name;
     const approved = await ctx.confirm(summary);

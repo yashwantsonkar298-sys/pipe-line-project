@@ -1,25 +1,21 @@
-/* ==========================================================================
-   NexusFlow Cyberpunk HUD Styling
-   ========================================================================== */
-
 :root {
   --bg-color: #050814;
   --panel-bg: rgba(10, 16, 33, 0.6);
   --panel-border: rgba(0, 240, 255, 0.15);
-  
-  /* Neon Accents */
+
+
   --accent-cyan: #00f0ff;
   --accent-purple: #bd00ff;
   --accent-green: #39ff14;
   --accent-red: #ff0055;
   --accent-yellow: #ffb700;
-  
-  /* Text colors */
+
+
   --text-primary: #e2e8f0;
   --text-secondary: #8a9fc4;
   --text-dim: #475a7c;
-  
-  /* Fonts */
+
+
   --font-hud: 'Orbitron', sans-serif;
   --font-sans: 'Inter', sans-serif;
   --font-mono: 'Fira Code', monospace;
@@ -40,8 +36,8 @@ body {
   position: relative;
 }
 
-/* Background Cyber Grid Effect */
-/* Animated Particle Canvas */
+
+
 #particle-canvas {
   position: fixed;
   top: 0;
@@ -53,14 +49,14 @@ body {
   background: transparent;
 }
 
-/* Cyber Grid Overlay */
+
 .cyber-grid {
   position: fixed;
   top: 0;
   left: 0;
   width: 100vw;
   height: 100vh;
-  background-image: 
+  background-image:
     linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
   background-size: 40px 40px;
@@ -80,7 +76,7 @@ body {
   z-index: -1;
 }
 
-/* Toast Notification System */
+
 .toast-container {
   position: fixed;
   top: 20px;
@@ -167,7 +163,7 @@ body {
   z-index: -1;
 }
 
-/* Scanlines overlay */
+
 .scanlines {
   position: fixed;
   top: 0;
@@ -175,7 +171,7 @@ body {
   width: 100%;
   height: 100%;
   background: linear-gradient(
-    rgba(18, 16, 16, 0) 50%, 
+    rgba(18, 16, 16, 0) 50%,
     rgba(0, 0, 0, 0.15) 50%
   );
   background-size: 100% 4px;
@@ -183,7 +179,7 @@ body {
   pointer-events: none;
 }
 
-/* Scrollbar styles */
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -200,9 +196,7 @@ body {
   box-shadow: 0 0 10px var(--accent-cyan);
 }
 
-/* ==========================================================================
-   Layout Containers
-   ========================================================================== */
+
 
 .hud-container {
   display: flex;
@@ -212,7 +206,7 @@ body {
   gap: 15px;
 }
 
-/* Top Header */
+
 .hud-header {
   height: 60px;
   background: var(--panel-bg);
@@ -304,16 +298,16 @@ body {
   padding-left: 12px;
 }
 
-/* Main Grid Layout */
+
 .hud-grid {
   display: grid;
   grid-template-columns: 320px 1fr 340px;
   flex: 1;
   gap: 15px;
-  min-height: 0; /* Important for flex child scrollings */
+  min-height: 0;
 }
 
-/* HUD Panels */
+
 .hud-panel {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
@@ -367,9 +361,7 @@ body {
   overflow-y: auto;
 }
 
-/* ==========================================================================
-   Left Column: Diagnostics & Mirror
-   ========================================================================== */
+
 
 .diagnostics-summary {
   display: flex;
@@ -400,7 +392,7 @@ body {
   color: var(--accent-cyan);
 }
 
-/* Battery Bar widget */
+
 .battery-bar-container {
   height: 4px;
   background: rgba(255, 255, 255, 0.1);
@@ -415,7 +407,7 @@ body {
   transition: width 0.5s ease-in-out;
 }
 
-/* Screen Mirroring Frame */
+
 .screen-mirror-wrapper {
   flex: 1;
   display: flex;
@@ -510,7 +502,7 @@ body {
   color: var(--accent-cyan);
 }
 
-/* Spinner */
+
 .spinner {
   width: 32px;
   height: 32px;
@@ -524,15 +516,13 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* ==========================================================================
-   Center Column: Visualizer & Terminal
-   ========================================================================== */
+
 
 .visualizer-content {
   gap: 25px;
 }
 
-/* Pipeline Flow Nodes Grid */
+
 .pipeline-flow-container {
   height: 120px;
   background: rgba(0, 0, 0, 0.2);
@@ -612,7 +602,7 @@ body {
   color: var(--text-secondary);
 }
 
-/* Active Node States */
+
 .pipeline-node.active .node-circle {
   border-color: var(--accent-cyan);
   color: var(--accent-cyan);
@@ -655,7 +645,7 @@ body {
   100% { transform: translate(0, 0); }
 }
 
-/* Console logs panel */
+
 .console-wrapper {
   flex: 1;
   background: #03050c;
@@ -745,7 +735,7 @@ body {
   color: var(--text-dim);
 }
 
-/* Speech controller inputs */
+
 .command-controls {
   display: flex;
   flex-direction: column;
@@ -890,9 +880,7 @@ body {
   text-align: center;
 }
 
-/* ==========================================================================
-   Right Column: Tabs (Contacts & Settings)
-   ========================================================================== */
+
 
 .tab-header {
   display: flex;
@@ -944,7 +932,7 @@ body {
   height: 100%;
 }
 
-/* Contacts Database */
+
 .contacts-list {
   display: flex;
   flex-direction: column;
@@ -1036,7 +1024,7 @@ body {
   font-size: 11px;
 }
 
-/* Settings Form */
+
 .settings-form {
   display: flex;
   flex-direction: column;
@@ -1083,7 +1071,7 @@ body {
   gap: 6px;
 }
 
-/* Wireless ADB Controls */
+
 .wireless-controls {
   display: flex;
   flex-direction: column;
@@ -1117,11 +1105,9 @@ body {
   box-shadow: 0 0 12px rgba(57, 255, 20, 0.15);
 }
 
-/* ==========================================================================
-   File Manager Styles (Phase 1)
-   ========================================================================== */
 
-/* Storage Info Bar */
+
+
 .fm-storage-bar {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.04);
@@ -1164,7 +1150,7 @@ body {
   border-radius: 2px;
 }
 
-/* Navigation Bar */
+
 .fm-nav-bar {
   display: flex;
   align-items: center;
@@ -1208,7 +1194,7 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Drag & Drop Zone */
+
 .fm-drop-zone {
   border: 2px dashed rgba(0, 240, 255, 0.15);
   border-radius: 6px;
@@ -1251,7 +1237,7 @@ body {
   animation: pulse-glow-border 1s infinite alternate;
 }
 
-/* Upload Progress */
+
 .fm-upload-progress {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(0, 240, 255, 0.1);
@@ -1283,7 +1269,7 @@ body {
   border-radius: 2px;
 }
 
-/* File List */
+
 .fm-file-list {
   display: flex;
   flex-direction: column;
@@ -1380,7 +1366,7 @@ body {
   background: rgba(255, 0, 85, 0.1);
 }
 
-/* File Manager States */
+
 .fm-loading {
   display: flex;
   flex-direction: column;
@@ -1413,9 +1399,7 @@ body {
   color: var(--accent-red);
 }
 
-/* ==========================================================================
-   Shutdown Overlay Warning
-   ========================================================================== */
+
 
 .shutdown-overlay {
   position: fixed;
@@ -1505,9 +1489,7 @@ body {
   box-shadow: 0 0 30px rgba(255, 0, 85, 0.6);
 }
 
-/* ==========================================================================
-   Helper Utilities / Keyframe Animations
-   ========================================================================== */
+
 
 .hidden {
   display: none !important;
@@ -1549,9 +1531,9 @@ body {
   to { box-shadow: 0 0 20px rgba(255, 0, 85, 0.5); }
 }
 
-/* ====================================================================== */
-/* VANI AI CHAT PANEL                                                      */
-/* ====================================================================== */
+
+
+
 #tab-content-ai { display: flex; flex-direction: column; height: 100%; gap: 8px; }
 .ai-status {
   font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.5px;
@@ -1576,9 +1558,9 @@ body {
 .ai-input-row { display: flex; gap: 6px; }
 .ai-input-row .hud-input { flex: 1; }
 
-/* ====================================================================== */
-/* STT LANGUAGE TOGGLE                                                     */
-/* ====================================================================== */
+
+
+
 .stt-lang-btn {
   flex: 0 0 auto;
   min-width: 40px;
@@ -1598,9 +1580,9 @@ body {
   box-shadow: 0 0 10px rgba(160, 100, 255, 0.4);
 }
 
-/* ====================================================================== */
-/* SETTINGS TOGGLE ROW                                                    */
-/* ====================================================================== */
+
+
+
 .toggle-row {
   display: flex;
   align-items: center;
@@ -1618,9 +1600,9 @@ body {
   cursor: pointer;
 }
 
-/* ====================================================================== */
-/* CONFIRM DIALOG + CONTACT EDIT + DANGER BUTTON                          */
-/* ====================================================================== */
+
+
+
 .confirm-overlay {
   position: fixed;
   inset: 0;
@@ -1667,9 +1649,9 @@ body {
   box-shadow: 0 0 12px rgba(255, 210, 0, 0.35);
 }
 
-/* ====================================================================== */
-/* MACROS PANEL                                                           */
-/* ====================================================================== */
+
+
+
 #tab-content-macros { display: flex; flex-direction: column; }
 .macro-list { display: flex; flex-direction: column; gap: 8px; }
 .macro-card {
@@ -1704,11 +1686,11 @@ body {
 .macro-step-row .step-del { color: var(--accent-red); }
 .macro-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
-/* ====================================================================== */
-/* LIVE MIRROR (tap-to-control)                                           */
-/* ====================================================================== */
+
+
+
 .phone-screen.mirror-live img {
-  object-fit: contain;          /* 1:1 coordinate mapping for taps */
+  object-fit: contain;
   cursor: crosshair;
   touch-action: none;
 }

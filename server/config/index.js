@@ -1,14 +1,3 @@
-/**
- * Central configuration + secret access.
- *
- * Rules:
- *  - Secrets (NEXUSFLOW_AUTH_TOKEN, ANTHROPIC_API_KEY) are read from the
- *    environment ONLY. They are never accepted from config.json or any HTTP
- *    request body.
- *  - config.json holds non-secret device preferences (unlock PIN, WhatsApp tap
- *    coordinates) and is gitignored.
- */
-
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -27,7 +16,6 @@ export const DEFAULT_CONFIG = Object.freeze({
   whatsappCoords: { x: 0.91, y: 0.55 }
 });
 
-/** JSON-schema (security.js subset) for POST /api/config */
 export const CONFIG_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -46,7 +34,6 @@ export const CONFIG_SCHEMA = {
   }
 };
 
-/** JSON-schema for POST /api/contacts (whole array replace) */
 export const CONTACTS_SCHEMA = {
   type: 'array',
   maxItems: 2000,
@@ -86,7 +73,6 @@ export function writeConfig(next) {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
 }
 
-/** config.json for the client - the PIN is never sent, only whether one is set. */
 export function readPublicConfig() {
   const cfg = readConfig();
   return {
@@ -97,10 +83,6 @@ export function readPublicConfig() {
   };
 }
 
-/**
- * Merge a validated POST body onto the stored config. An empty/omitted
- * unlockPin keeps the existing one (the client never receives it to echo back).
- */
 export function mergeConfig(body) {
   const current = readConfig();
   const pin = typeof body.unlockPin === 'string' && body.unlockPin.length
@@ -122,7 +104,6 @@ export function writeContacts(list) {
   fs.writeFileSync(CONTACTS_FILE, JSON.stringify(list, null, 2));
 }
 
-// ---- Secrets: environment only ----------------------------------------
 
 export function getAuthToken(env = process.env) {
   const v = env.NEXUSFLOW_AUTH_TOKEN;

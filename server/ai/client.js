@@ -1,11 +1,3 @@
-/**
- * Anthropic client for the "Vani" assistant.
- *
- * The API key is read from ANTHROPIC_API_KEY (env only, never a request body or
- * a URL). The whole app runs fine without it - the AI features just report as
- * disabled.
- */
-
 import Anthropic from '@anthropic-ai/sdk';
 import { getAnthropicKey } from '../config/index.js';
 

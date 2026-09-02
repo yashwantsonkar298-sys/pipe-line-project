@@ -1,7 +1,3 @@
-// ==========================================================================
-// Vani AI chat panel. Talks to the server over the shared WebSocket
-// (`ai_chat` out; `ai_delta` / `ai_reply` / `ai_action` / `confirm_request` in).
-// ==========================================================================
 (function () {
   const log = document.getElementById('ai-chat-log');
   const input = document.getElementById('ai-input');

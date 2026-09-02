@@ -4,29 +4,29 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusFlow // Advanced PC-Mobile Pipeline Controller</title>
-  <!-- Google Fonts -->
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
-  <!-- Stylesheet -->
+
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
 
-  <!-- Animated Particle Network Background -->
+
   <canvas id="particle-canvas"></canvas>
 
-  <!-- Background Cyber Grid -->
+
   <div class="cyber-grid"></div>
   <div class="scanlines"></div>
 
-  <!-- Toast Notification Container -->
+
   <div class="toast-container" id="toast-container"></div>
 
-  <!-- Main HUD Layout -->
+
   <div class="hud-container">
-    
-    <!-- Top Header Bar -->
+
+
     <header class="hud-header">
       <div class="header-logo">
         <span class="logo-accent">⚡</span>
@@ -43,17 +43,17 @@
       </div>
     </header>
 
-    <!-- Main Grid -->
+
     <main class="hud-grid">
-      
-      <!-- LEFT COLUMN: Mobile Status & Mirroring -->
+
+
       <section class="hud-panel col-left">
         <div class="panel-header">
           <h2>DEVICE DIAGNOSTICS</h2>
           <span class="panel-subtitle">LIVE METRICS</span>
         </div>
         <div class="panel-content">
-          <!-- Diagnostics Grid -->
+
           <div class="diagnostics-summary">
             <div class="diag-widget">
               <span class="diag-label">SYSTEM</span>
@@ -76,7 +76,7 @@
             </div>
           </div>
 
-          <!-- Screen Mirror -->
+
           <div class="screen-mirror-wrapper">
             <div class="phone-frame">
               <div class="phone-screen" id="phone-screen-container">
@@ -116,23 +116,23 @@
         </div>
       </section>
 
-      <!-- CENTER COLUMN: Pipeline Control & Terminal -->
+
       <section class="hud-panel col-center">
         <div class="panel-header">
           <h2>PIPELINE VISUALIZER</h2>
           <span class="panel-subtitle">REAL-TIME DATA FLOW</span>
         </div>
         <div class="panel-content visualizer-content">
-          
-          <!-- Pipeline Flow Nodes -->
+
+
           <div class="pipeline-flow-container">
             <svg class="pipeline-connector-svg" id="pipeline-svg">
               <path d="M 50 40 L 150 40" id="path-0" class="connector-path"></path>
               <path d="M 150 40 L 250 40" id="path-1" class="connector-path"></path>
               <path d="M 250 40 L 350 40" id="path-2" class="connector-path"></path>
               <path d="M 350 40 L 450 40" id="path-3" class="connector-path"></path>
-              
-              <!-- Glow paths during execution -->
+
+
               <path d="M 50 40 L 150 40" id="glow-path-0" class="glow-connector-path hidden"></path>
               <path d="M 150 40 L 250 40" id="glow-path-1" class="glow-connector-path hidden"></path>
               <path d="M 250 40 L 350 40" id="glow-path-2" class="glow-connector-path hidden"></path>
@@ -149,7 +149,7 @@
                 </div>
                 <span>INPUT</span>
               </div>
-              
+
               <div class="pipeline-node" id="node-1" data-label="NLP Core">
                 <div class="node-circle">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
@@ -194,7 +194,7 @@
             </div>
           </div>
 
-          <!-- Console Terminal -->
+
           <div class="console-wrapper">
             <div class="console-header">
               <span class="terminal-dot red"></span>
@@ -208,15 +208,15 @@
             </div>
           </div>
 
-          <!-- Speech Controller -->
+
           <div class="command-controls">
-            <!-- Audio Waveform Area -->
+
             <div class="waveform-container hidden" id="waveform-wrapper">
               <canvas id="voice-canvas" width="400" height="60"></canvas>
               <span class="listening-text">LISTENING FOR COMMAND... (SAY CALL, WHATSAPP, OR SHUTDOWN)</span>
             </div>
 
-            <!-- Inputs -->
+
             <div class="input-row">
               <button class="voice-trigger-btn" id="btn-voice-trigger">
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5" class="mic-icon">
@@ -236,10 +236,10 @@
         </div>
       </section>
 
-      <!-- RIGHT COLUMN: Contacts Book & Settings -->
+
       <section class="hud-panel col-right">
-        
-        <!-- Tab Selectors -->
+
+
         <div class="tab-header">
           <button class="tab-btn active" id="tab-btn-contacts">CONTACTS</button>
           <button class="tab-btn" id="tab-btn-files">FILES</button>
@@ -249,13 +249,13 @@
         </div>
 
         <div class="panel-content tab-panel-content">
-          <!-- CONTACTS CONTAINER -->
+
           <div class="tab-content" id="tab-content-contacts">
             <div class="contacts-list" id="contacts-list-container">
-              <!-- Dynamically Loaded -->
+
             </div>
-            
-            <!-- FEATURE 3: Sync From Phone Button -->
+
+
             <button class="hud-btn btn-secondary btn-full btn-sm" id="btn-sync-contacts" style="margin-bottom: 10px;">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -266,7 +266,7 @@
               SYNC PHONE CONTACTS
             </button>
 
-            <!-- CLEAR CONTACTS BUTTON -->
+
             <button class="hud-btn btn-secondary btn-full btn-sm" id="btn-clear-contacts" style="margin-bottom: 10px; background: rgba(255,0,0,0.2); border-color: #ff3333; color: #ff9999;">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"></polyline>
@@ -274,7 +274,7 @@
               </svg>
               CLEAR ALL CONTACTS
             </button>
-            
+
             <div class="contact-form">
               <h3>ADD / EDIT CONTACT</h3>
               <div class="form-inputs">
@@ -285,7 +285,7 @@
             </div>
           </div>
 
-          <!-- SETTINGS CONTAINER -->
+
           <div class="tab-content hidden" id="tab-content-settings">
             <div class="settings-form">
               <div class="settings-group">
@@ -317,8 +317,8 @@
               </div>
 
               <button class="hud-btn btn-primary btn-full" id="btn-save-config">APPLY SYSTEM PROPERTIES</button>
-              
-              <!-- FEATURE 4: Wireless ADB Mode -->
+
+
               <div class="settings-group" style="margin-top: 20px;">
                 <h3>WIRELESS ADB MODE</h3>
                 <span class="input-desc">Enable ADB over Wi-Fi so you can remove the USB cable after initial pairing. Both devices must be on the same WiFi network.</span>
@@ -338,9 +338,9 @@
             </div>
           </div>
 
-          <!-- FILES CONTAINER (Phase 1) -->
+
           <div class="tab-content hidden" id="tab-content-files">
-            <!-- Storage Info Bar -->
+
             <div class="fm-storage-bar">
               <div class="fm-storage-header">
                 <span class="fm-storage-label">DEVICE STORAGE</span>
@@ -351,11 +351,11 @@
               </div>
             </div>
 
-            <!-- Install APK -->
+
             <button class="hud-btn btn-secondary btn-full btn-sm" id="btn-install-apk" style="margin-bottom:10px;">📦 INSTALL APK ON PHONE</button>
             <input type="file" id="apk-file-input" accept=".apk" hidden>
 
-            <!-- Navigation Bar -->
+
             <div class="fm-nav-bar">
               <button class="btn-icon" id="fm-btn-back" disabled title="Back">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
@@ -369,7 +369,7 @@
               </button>
             </div>
 
-            <!-- Drag & Drop Upload Zone -->
+
             <div class="fm-drop-zone" id="fm-drop-zone">
               <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -381,7 +381,7 @@
               <input type="file" id="fm-file-input" multiple hidden>
             </div>
 
-            <!-- Upload Progress -->
+
             <div class="fm-upload-progress hidden" id="fm-upload-progress">
               <span class="fm-upload-progress-text" id="fm-upload-progress-text">Uploading...</span>
               <div class="fm-progress-track">
@@ -389,13 +389,13 @@
               </div>
             </div>
 
-            <!-- File List -->
+
             <div class="fm-file-list" id="fm-file-list">
               <div class="fm-empty">📂 Click the FILES tab to browse your device</div>
             </div>
           </div>
 
-          <!-- MACROS -->
+
           <div class="tab-content hidden" id="tab-content-macros">
             <div class="macro-list" id="macro-list">
               <div class="fm-empty">Loading macros…</div>
@@ -414,7 +414,7 @@
             </div>
           </div>
 
-          <!-- VANI AI CHAT -->
+
           <div class="tab-content hidden" id="tab-content-ai">
             <div class="ai-status" id="ai-status">Checking AI status…</div>
             <div class="ai-chat-log" id="ai-chat-log">
@@ -432,7 +432,7 @@
     </main>
   </div>
 
-  <!-- SHUTDOWN COUNTDOWN OVERLAY -->
+
   <div class="shutdown-overlay hidden" id="shutdown-overlay">
     <div class="shutdown-dialog">
       <div class="skull-badge">⚠️</div>
@@ -440,14 +440,14 @@
       <p>Initiating PC System Shutdown in</p>
       <div class="countdown-timer" id="shutdown-countdown">10</div>
       <p class="warning-alert">ALL UNSAVED PROCESSES WILL BE TERMINATED</p>
-      
+
       <button class="abort-btn" id="btn-abort-shutdown">
         ABORT SHUTDOWN SEQUENCE
       </button>
     </div>
   </div>
 
-  <!-- JavaScript Modules -->
+
   <script src="js/wsClient.js"></script>
   <script src="js/particles.js"></script>
   <script src="js/voice.js"></script>

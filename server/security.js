@@ -1,16 +1,14 @@
 import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 
-// Keep the security policy explicit: a missing token means local-only access.
 export const AUTH_TOKEN_ENV = 'NEXUSFLOW_AUTH_TOKEN';
 
-const DEFAULT_JSON_LIMIT = 1_048_576; // 1 MiB
+const DEFAULT_JSON_LIMIT = 1_048_576;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_RATE_MAX = 60;
 const DEFAULT_RATE_KEYS = 10_000;
 const OWN = Object.prototype.hasOwnProperty;
 
-/** An error whose client-safe message may be returned by sendSafeError. */
 export class HttpError extends Error {
   constructor(statusCode, code, message, { expose = statusCode < 500 } = {}) {
     super(message);
@@ -21,16 +19,11 @@ export class HttpError extends Error {
   }
 }
 
-/** Returns a non-empty NEXUSFLOW_AUTH_TOKEN, or null when local-only mode is active. */
 export function getConfiguredAuthToken(env = process.env) {
   const value = env?.[AUTH_TOKEN_ENV];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-/**
- * Returns a client IP without trusting proxy headers unless trustProxy is explicitly true.
- * Only enable trustProxy behind a reverse proxy that overwrites X-Forwarded-For.
- */
 export function getRequestIp(request, { trustProxy = false } = {}) {
   if (trustProxy) {
     const forwarded = getHeader(request, 'x-forwarded-for');
@@ -45,7 +38,6 @@ export function getRequestIp(request, { trustProxy = false } = {}) {
     ?? null;
 }
 
-/** Strictly recognises IPv4/IPv6 loopback literals; it never performs DNS lookups. */
 export function isLoopbackAddress(address) {
   if (typeof address !== 'string' || !address.trim()) return false;
 
@@ -59,12 +51,10 @@ export function isLoopbackAddress(address) {
   const ipv6 = expandIpv6(value);
   if (!ipv6) return false;
 
-  // ::1 and its full, uncompressed spelling.
   if (ipv6.slice(0, 7).every((part) => part === 0) && ipv6[7] === 1) {
     return true;
   }
 
-  // IPv4-mapped loopback, for example ::ffff:127.0.0.1 or ::ffff:7f00:1.
   return ipv6.slice(0, 5).every((part) => part === 0)
     && ipv6[5] === 0xffff
     && (ipv6[6] >> 8) === 127;
@@ -74,7 +64,6 @@ export function isRequestFromLoopback(request, options) {
   return isLoopbackAddress(getRequestIp(request, options));
 }
 
-/** Extracts exactly one bearer token from an HTTP Authorization header. */
 export function readBearerToken(request) {
   const authorization = getHeader(request, 'authorization');
   const match = typeof authorization === 'string'
@@ -83,17 +72,12 @@ export function readBearerToken(request) {
   return match?.[1] ?? null;
 }
 
-/** Constant-time bearer-token verification. Defaults to NEXUSFLOW_AUTH_TOKEN. */
 export function verifyBearerToken(request, { authToken = getConfiguredAuthToken() } = {}) {
   const expected = normalizeAuthToken(authToken);
   const supplied = readBearerToken(request);
   return Boolean(expected && supplied && tokensEqual(supplied, expected));
 }
 
-/**
- * Express-compatible policy middleware. With NEXUSFLOW_AUTH_TOKEN set, every
- * caller needs a bearer token; otherwise only direct loopback clients are allowed.
- */
 export function createHttpAccessMiddleware({
   authToken = getConfiguredAuthToken(),
   trustProxy = false,
@@ -118,7 +102,6 @@ export function createHttpAccessMiddleware({
   };
 }
 
-/** Reads one token query parameter from a WebSocket upgrade URL. */
 export function getWebSocketUrlToken(request, { tokenParam = 'token' } = {}) {
   if (typeof request?.url !== 'string' || !isSafeQueryKey(tokenParam)) return null;
 
@@ -131,7 +114,6 @@ export function getWebSocketUrlToken(request, { tokenParam = 'token' } = {}) {
   }
 }
 
-/** Normalises an exact http(s) origin for comparison, rejecting paths and opaque origins. */
 export function normalizeOrigin(origin) {
   if (typeof origin !== 'string' || !origin.trim()) return null;
 
@@ -145,7 +127,6 @@ export function normalizeOrigin(origin) {
   }
 }
 
-/** Exact origin allowlist check. Wildcards are intentionally not supported. */
 export function isOriginAllowed(origin, allowedOrigins = [], { allowMissingOrigin = true } = {}) {
   if (origin === undefined || origin === null || origin === '') return allowMissingOrigin;
 
@@ -164,10 +145,6 @@ export function isOriginAllowed(origin, allowedOrigins = [], { allowMissingOrigi
   return false;
 }
 
-/**
- * Validates a WebSocket upgrade before wss.handleUpgrade(). Browser origins must
- * be supplied explicitly in allowedOrigins; non-browser clients may omit Origin.
- */
 export function authorizeWebSocketUpgrade(request, {
   authToken = getConfiguredAuthToken(),
   tokenParam = 'token',
@@ -194,10 +171,6 @@ export function authorizeWebSocketUpgrade(request, {
   return { ok: true, statusCode: 101, code: 'OK', clientIp };
 }
 
-/**
- * Creates a small fixed-window, in-memory limiter. Call check(key) directly or
- * use middleware with an Express route. It is process-local, not distributed.
- */
 export function createRateLimiter({
   windowMs = DEFAULT_RATE_WINDOW_MS,
   max = DEFAULT_RATE_MAX,
@@ -265,7 +238,6 @@ export function createRateLimiter({
   };
 }
 
-/** Reads a JSON request body with a byte cap and without relying on Express middleware. */
 export async function readJsonBody(request, {
   limitBytes = DEFAULT_JSON_LIMIT,
   requireJsonContentType = false,
@@ -314,10 +286,6 @@ export async function readJsonBody(request, {
   }
 }
 
-/**
- * Validates a focused JSON-schema subset: type, enum, object properties,
- * required/additionalProperties, arrays/items, and common size/range limits.
- */
 export function validateJsonSchema(value, schema, { maxErrors = 25 } = {}) {
   const safeMaxErrors = positiveInteger(maxErrors, 'maxErrors');
   const errors = [];
@@ -407,7 +375,6 @@ export function validateJsonSchema(value, schema, { maxErrors = 25 } = {}) {
   return { valid: errors.length === 0, errors };
 }
 
-/** Throws a safe 400 HttpError when a value does not satisfy validateJsonSchema. */
 export function assertJsonSchema(value, schema, options) {
   const result = validateJsonSchema(value, schema, options);
   if (!result.valid) {
@@ -416,13 +383,11 @@ export function assertJsonSchema(value, schema, options) {
   return value;
 }
 
-/** Convenience helper for routes that need both safe JSON parsing and validation. */
 export async function readValidatedJsonBody(request, schema, options = {}) {
   const body = await readJsonBody(request, options);
   return assertJsonSchema(body, schema, options);
 }
 
-/** Produces a JSON-safe error payload without stack traces or internal details. */
 export function safeErrorPayload(error) {
   if (error instanceof HttpError && error.expose) {
     return {
@@ -437,7 +402,6 @@ export function safeErrorPayload(error) {
   };
 }
 
-/** Sends a safe JSON error through either an Express or native Node response. */
 export function sendSafeError(response, error) {
   const payload = safeErrorPayload(error);
   if (!response || response.headersSent || response.writableEnded) return payload;
@@ -475,7 +439,6 @@ function getHeader(request, name) {
     .filter(([key]) => key.toLowerCase() === target)
     .map(([, value]) => value);
 
-  // Multiple header spellings are ambiguous and must not grant access.
   return values.length === 1 && typeof values[0] === 'string' ? values[0] : undefined;
 }
 

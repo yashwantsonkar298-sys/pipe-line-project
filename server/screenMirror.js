@@ -1,8 +1,3 @@
-/**
- * NexusFlow Screen Mirror
- * ADB screencap frames + input forwarding (tap / swipe). No host shell.
- */
-
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -28,10 +23,6 @@ const clampInt = (v) => {
   return Number.isFinite(n) ? Math.max(0, Math.min(20000, n)) : 0;
 };
 
-/**
- * Map a normalized point (0..1, 0..1) to device pixels using a "WxH" string.
- * Exported for testing.
- */
 export function scaleToDevice(nx, ny, resolution) {
   const m = String(resolution || '').match(/(\d+)\s*[xX]\s*(\d+)/);
   const w = m ? parseInt(m[1], 10) : 1080;
@@ -41,11 +32,6 @@ export function scaleToDevice(nx, ny, resolution) {
   return { x: Math.round(cx * (w - 1)), y: Math.round(cy * (h - 1)) };
 }
 
-/**
- * Capture one screen frame as raw PNG bytes.
- * @param {string} [deviceId]
- * @returns {Promise<{success:boolean, buffer?:Buffer, error?:string}>}
- */
 export async function captureFrame(deviceId) {
   try {
     const { stdout } = await execFileAsync(
@@ -56,27 +42,24 @@ export async function captureFrame(deviceId) {
     if (stdout && stdout.length > 100) return { success: true, buffer: stdout };
     throw new Error('Empty frame');
   } catch (error) {
-    // Fallback: pull to a private runtime file, then read it.
     try {
       if (!fs.existsSync(RUNTIME_DIR)) fs.mkdirSync(RUNTIME_DIR, { recursive: true });
       const tmp = path.join(RUNTIME_DIR, 'mirror_frame.png');
       await execFileAsync(getAdbPath(), [...deviceArgs(deviceId), 'shell', 'screencap', '-p', '/sdcard/nx_mirror.png'], { timeout: 10000 });
       await execFileAsync(getAdbPath(), [...deviceArgs(deviceId), 'pull', '/sdcard/nx_mirror.png', tmp], { timeout: 10000 });
       const data = fs.readFileSync(tmp);
-      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      try { fs.unlinkSync(tmp); } catch {  }
       if (data.length > 100) return { success: true, buffer: data };
-    } catch { /* ignore fallback errors */ }
+    } catch {  }
     return { success: false, error: error.message };
   }
 }
 
-/** Tap at device pixel coordinates. */
 export async function sendTap(x, y, deviceId) {
   await execFileAsync(getAdbPath(), [...deviceArgs(deviceId), 'shell', 'input', 'tap', String(clampInt(x)), String(clampInt(y))], { timeout: 5000 });
   return { success: true };
 }
 
-/** Swipe between two device pixel points. */
 export async function sendSwipe(x1, y1, x2, y2, duration = 250, deviceId) {
   const d = Math.max(30, Math.min(3000, Math.round(Number(duration) || 250)));
   await execFileAsync(getAdbPath(), [

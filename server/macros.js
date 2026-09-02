@@ -1,8 +1,3 @@
-/**
- * NexusFlow Macro Recorder Module
- * Record, save, and replay automation sequences
- */
-
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -12,7 +7,6 @@ import { assertJsonSchema } from './security.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MACROS_FILE = path.join(__dirname, 'macros.json');
 
-/** Schema for a create/update macro body (security.js validator subset). */
 export const MACRO_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -44,7 +38,6 @@ export function validateMacro(body) {
   return body;
 }
 
-// Default macros
 const DEFAULT_MACROS = [
   {
     id: 'morning-routine',
@@ -84,14 +77,10 @@ const DEFAULT_MACROS = [
   }
 ];
 
-// Initialize macros file
 if (!fs.existsSync(MACROS_FILE)) {
   fs.writeFileSync(MACROS_FILE, JSON.stringify(DEFAULT_MACROS, null, 2));
 }
 
-/**
- * Get all macros
- */
 export function getMacros() {
   try {
     const data = fs.readFileSync(MACROS_FILE, 'utf8');
@@ -101,20 +90,14 @@ export function getMacros() {
   }
 }
 
-/**
- * Get a single macro by ID
- */
 export function getMacroById(id) {
   const macros = getMacros();
   return macros.find(m => m.id === id) || null;
 }
 
-/**
- * Save a new macro
- */
 export function saveMacro(macro) {
   const macros = getMacros();
-  
+
   const newMacro = {
     id: macro.id || `macro-${Date.now()}`,
     name: macro.name || 'Untitled Macro',
@@ -123,52 +106,40 @@ export function saveMacro(macro) {
     schedule: macro.schedule || null,
     createdAt: Date.now()
   };
-  
+
   macros.push(newMacro);
   fs.writeFileSync(MACROS_FILE, JSON.stringify(macros, null, 2));
-  
+
   return { success: true, macro: newMacro };
 }
 
-/**
- * Update an existing macro
- */
 export function updateMacro(id, updates) {
   const macros = getMacros();
   const index = macros.findIndex(m => m.id === id);
-  
+
   if (index === -1) {
     return { success: false, error: 'Macro not found' };
   }
-  
+
   macros[index] = { ...macros[index], ...updates };
   fs.writeFileSync(MACROS_FILE, JSON.stringify(macros, null, 2));
-  
+
   return { success: true, macro: macros[index] };
 }
 
-/**
- * Delete a macro
- */
 export function deleteMacro(id) {
   let macros = getMacros();
   const before = macros.length;
   macros = macros.filter(m => m.id !== id);
-  
+
   if (macros.length === before) {
     return { success: false, error: 'Macro not found' };
   }
-  
+
   fs.writeFileSync(MACROS_FILE, JSON.stringify(macros, null, 2));
   return { success: true, message: 'Macro deleted' };
 }
 
-/**
- * Execute a macro (runs each step sequentially)
- * @param {string} id - Macro ID
- * @param {Function} executeCommand - Function to execute each command
- * @param {Function} onStep - Callback for step progress
- */
 export async function executeMacro(id, executeCommand, onStep) {
   const macro = getMacroById(id);
   if (!macro) {
@@ -176,10 +147,10 @@ export async function executeMacro(id, executeCommand, onStep) {
   }
 
   const results = [];
-  
+
   for (let i = 0; i < macro.steps.length; i++) {
     const step = macro.steps[i];
-    
+
     if (onStep) {
       onStep({
         macroId: id,
@@ -194,7 +165,7 @@ export async function executeMacro(id, executeCommand, onStep) {
     try {
       await executeCommand(step.command);
       results.push({ step: i, command: step.command, success: true });
-      
+
       if (onStep) {
         onStep({
           macroId: id,
@@ -206,7 +177,7 @@ export async function executeMacro(id, executeCommand, onStep) {
       }
     } catch (error) {
       results.push({ step: i, command: step.command, success: false, error: error.message });
-      
+
       if (onStep) {
         onStep({
           macroId: id,
@@ -219,7 +190,6 @@ export async function executeMacro(id, executeCommand, onStep) {
       }
     }
 
-    // Wait between steps
     if (step.delay && i < macro.steps.length - 1) {
       await new Promise(resolve => setTimeout(resolve, step.delay));
     }

@@ -1,15 +1,8 @@
-// ==========================================================================
-// NexusFlow Core Frontend Controller
-// ==========================================================================
-
-// Reconnecting client (js/wsClient.js). Same surface as a raw WebSocket:
-// .send(), .addEventListener('message'|'open'|'close'|'reconnecting').
 const socket = window.NexusWS;
 
 let contactsData = [];
 let configData = {};
 
-// Cache DOM Elements
 const toastContainer = document.getElementById('toast-container');
 const adbStatusDot = document.getElementById('adb-status-dot');
 const adbStatusText = document.getElementById('adb-status-text');
@@ -36,25 +29,21 @@ const shutdownOverlay = document.getElementById('shutdown-overlay');
 const shutdownCountdown = document.getElementById('shutdown-countdown');
 const btnAbortShutdown = document.getElementById('btn-abort-shutdown');
 
-// Tabs
 const tabBtnContacts = document.getElementById('tab-btn-contacts');
 const tabBtnSettings = document.getElementById('tab-btn-settings');
 const tabContentContacts = document.getElementById('tab-content-contacts');
 const tabContentSettings = document.getElementById('tab-content-settings');
 
-// Contacts
 const contactsListContainer = document.getElementById('contacts-list-container');
 const contactNameInput = document.getElementById('contact-name');
 const contactPhoneInput = document.getElementById('contact-phone');
 const btnSaveContact = document.getElementById('btn-save-contact');
 
-// Config settings
 const cfgPinInput = document.getElementById('cfg-pin');
 const cfgWxInput = document.getElementById('cfg-wx');
 const cfgWyInput = document.getElementById('cfg-wy');
 const btnSaveConfig = document.getElementById('btn-save-config');
 
-// Initialize WebSockets
 let wasDisconnected = false;
 socket.addEventListener('open', () => {
   if (wasDisconnected) {
@@ -67,7 +56,7 @@ socket.addEventListener('open', () => {
 });
 
 socket.addEventListener('reconnecting', ({ delay, everConnected }) => {
-  if (!everConnected) return; // initial connect - stay quiet
+  if (!everConnected) return;
   wasDisconnected = true;
   if (adbStatusDot) adbStatusDot.className = 'status-dot disconnected';
   if (adbStatusText) adbStatusText.textContent = 'RECONNECTING…';
@@ -96,7 +85,6 @@ socket.addEventListener('message', (event) => {
 
     case 'command_queued':
     case 'job_event':
-      // surfaced in the pipeline/terminal already; no-op for now
       break;
 
     case 'pipeline_start':
@@ -110,12 +98,10 @@ socket.addEventListener('message', (event) => {
 
     case 'pipeline_end':
       appendTerminalLine(`[PIPELINE END] Success: ${data.success}${data.error ? ' | Error: ' + data.error : ''}`, data.success ? 'adb-success' : 'adb-error');
-      
-      // Pro-Max Visuals: Toast and Particles
+
       if (data.success) {
         showToast('PIPELINE SUCCESS', data.ttsMessage || 'Action executed successfully.', 'success');
         if (typeof window.spawnParticlePulse === 'function') {
-          // Trigger multiple particle bursts
           setTimeout(() => window.spawnParticlePulse(window.innerWidth/2, window.innerHeight/2), 100);
           setTimeout(() => window.spawnParticlePulse(window.innerWidth/3, window.innerHeight/2), 300);
           setTimeout(() => window.spawnParticlePulse(window.innerWidth*0.66, window.innerHeight/2), 500);
@@ -124,7 +110,6 @@ socket.addEventListener('message', (event) => {
         showToast('PIPELINE FAILED', data.error || 'Unknown error occurred.', 'error');
       }
 
-      // FEATURE 2: Vani TTS voice response
       if (data.ttsMessage && typeof window.vaniSpeak === 'function') {
         window.vaniSpeak(data.ttsMessage);
       }
@@ -162,22 +147,17 @@ socket.addEventListener('message', (event) => {
 });
 
 socket.addEventListener('close', () => {
-  // The client auto-reconnects; the 'reconnecting' handler owns the UI so we
-  // don't spam a toast on every drop.
   if (adbStatusDot) adbStatusDot.className = 'status-dot disconnected';
   if (adbStatusText) adbStatusText.textContent = 'SERVER DISCONNECTED';
 });
 
-// ==========================================================================
-// Toast Notification System
-// ==========================================================================
 
 function showToast(title, message, type = 'success') {
   if (!toastContainer) return;
-  
+
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  
+
   let iconHtml = '';
   if (type === 'success') {
     iconHtml = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-green)"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
@@ -194,10 +174,9 @@ function showToast(title, message, type = 'success') {
       <div class="toast-message">${message}</div>
     </div>
   `;
-  
+
   toastContainer.appendChild(toast);
 
-  // Auto remove after 4.5 seconds
   setTimeout(() => {
     toast.classList.add('toast-exit');
     toast.addEventListener('animationend', () => {
@@ -206,10 +185,6 @@ function showToast(title, message, type = 'success') {
   }, 4500);
 }
 
-/**
- * In-app confirmation modal. Returns a Promise<boolean>. Replaces window.confirm
- * so the cyber theme is preserved and blocking prompts are gone.
- */
 function confirmDialog(message, { okText = 'Confirm', cancelText = 'Cancel', danger = false } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -247,9 +222,6 @@ function confirmDialog(message, { okText = 'Confirm', cancelText = 'Cancel', dan
   });
 }
 
-// ==========================================================================
-// Pipeline Visualization Rendering
-// ==========================================================================
 
 function resetPipelineNodes() {
   const nodes = document.querySelectorAll('.pipeline-node');
@@ -267,15 +239,13 @@ function updatePipelineStep(stepIndex, status, logMessage) {
   const node = document.getElementById(`node-${stepIndex}`);
   if (!node) return;
 
-  // Reset classes and apply state
   node.className = 'pipeline-node';
-  
+
   if (status === 'pending') {
     node.classList.add('active');
   } else if (status === 'success') {
     node.classList.add('success');
-    
-    // Light up connecting path to next node
+
     const glowPath = document.getElementById(`glow-path-${stepIndex}`);
     if (glowPath) {
       glowPath.classList.remove('hidden');
@@ -287,27 +257,25 @@ function updatePipelineStep(stepIndex, status, logMessage) {
   appendTerminalLine(`[PIPELINE STAGE ${stepIndex}] ${logMessage}`, status === 'success' ? 'adb-success' : (status === 'failed' ? 'adb-error' : 'system'));
 }
 
-// Draw paths between nodes dynamically
 function drawConnectorPaths() {
   const svg = document.getElementById('pipeline-svg');
   if (!svg) return;
-  
+
   const nodes = document.querySelectorAll('.pipeline-node');
   const svgRect = svg.getBoundingClientRect();
-  
+
   for (let i = 0; i < nodes.length - 1; i++) {
     const nodeA = nodes[i].querySelector('.node-circle').getBoundingClientRect();
     const nodeB = nodes[i+1].querySelector('.node-circle').getBoundingClientRect();
-    
-    // Calculate centers
+
     const x1 = nodeA.left - svgRect.left + nodeA.width / 2;
     const y1 = nodeA.top - svgRect.top + nodeA.height / 2;
     const x2 = nodeB.left - svgRect.left + nodeB.width / 2;
     const y2 = nodeB.top - svgRect.top + nodeB.height / 2;
-    
+
     const path = document.getElementById(`path-${i}`);
     const glowPath = document.getElementById(`glow-path-${i}`);
-    
+
     if (path && glowPath) {
       const d = `M ${x1} ${y1} L ${x2} ${y2}`;
       path.setAttribute('d', d);
@@ -316,13 +284,9 @@ function drawConnectorPaths() {
   }
 }
 
-// Draw paths after render and resize
 window.addEventListener('resize', drawConnectorPaths);
 setTimeout(drawConnectorPaths, 500);
 
-// ==========================================================================
-// Terminal Logs Writer
-// ==========================================================================
 
 function appendTerminalLine(text, type = 'system') {
   const line = document.createElement('div');
@@ -332,9 +296,6 @@ function appendTerminalLine(text, type = 'system') {
   consoleLogs.scrollTop = consoleLogs.scrollHeight;
 }
 
-// ==========================================================================
-// Diagnostics HUD Updater
-// ==========================================================================
 
 function updateDiagnosticsHUD(data) {
   if (!data || !data.connected) {
@@ -346,14 +307,13 @@ function updateDiagnosticsHUD(data) {
     diagBatteryFill.style.width = '0%';
     diagTemp.textContent = 'N/A';
     diagRes.textContent = 'N/A';
-    
+
     btnRefreshScreen.disabled = true;
     phoneScreenshot.classList.add('hidden');
     screenFallback.classList.remove('hidden');
     return;
   }
 
-  // Update connected states
   adbStatusDot.className = 'status-dot connected';
   adbStatusText.textContent = 'ADB CONNECTED';
   deviceModelText.textContent = `${data.brand} ${data.model}`.toUpperCase();
@@ -361,7 +321,7 @@ function updateDiagnosticsHUD(data) {
   diagOs.textContent = `ANDROID ${data.androidVersion}`;
   diagBattery.textContent = `${data.batteryLevel}% (${data.batteryStatus})`;
   diagBatteryFill.style.width = `${data.batteryLevel}%`;
-  
+
   if (data.batteryTemp) {
     diagTemp.textContent = `${data.batteryTemp} °C`;
   } else {
@@ -373,21 +333,17 @@ function updateDiagnosticsHUD(data) {
   btnLiveFeed.disabled = false;
 }
 
-// Pull Mobile Screenshot
 btnRefreshScreen.addEventListener('click', async () => {
   screenSpinner.classList.remove('hidden');
   appendTerminalLine('[DIAGNOSTICS] Requesting system screencap...', 'system');
   await fetchScreenshot();
 });
 
-// ==========================================================================
-// Live Screen Mirror + tap-to-control
-// ==========================================================================
-let liveFeedInterval = null;  // kept for fetchScreenshot() compatibility
+let liveFeedInterval = null;
 let mirrorTimer = null;
 let mirrorBusy = false;
 let mirrorObjectUrl = null;
-const MIRROR_INTERVAL_MS = 300; // ~3 fps
+const MIRROR_INTERVAL_MS = 300;
 
 async function pullMirrorFrame() {
   if (mirrorBusy) return;
@@ -432,7 +388,6 @@ function stopMirror() {
 btnLiveFeed.addEventListener('click', () => (mirrorTimer ? stopMirror() : startMirror()));
 if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
 
-// Mirror input: click -> tap, drag -> swipe, mouse wheel -> scroll the phone.
 (function wireMirrorInput() {
   let down = null;
 
@@ -453,20 +408,19 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
     setTimeout(pullMirrorFrame, 100);
   }
 
-  // Stop the browser from starting its own image-drag while mirroring.
   phoneScreenshot.setAttribute('draggable', 'false');
   phoneScreenshot.addEventListener('dragstart', (e) => e.preventDefault());
 
   phoneScreenshot.addEventListener('pointerdown', (e) => {
     if (!mirrorTimer) return;
     e.preventDefault();
-    try { phoneScreenshot.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    try { phoneScreenshot.setPointerCapture(e.pointerId); } catch {  }
     down = { pt: norm(e), t: Date.now() };
   });
 
   phoneScreenshot.addEventListener('pointerup', async (e) => {
     if (!mirrorTimer || !down || !down.pt) { down = null; return; }
-    try { phoneScreenshot.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    try { phoneScreenshot.releasePointerCapture(e.pointerId); } catch {  }
     const up = norm(e);
     const dist = up ? Math.hypot(up.x - down.pt.x, up.y - down.pt.y) : 0;
     try {
@@ -485,9 +439,6 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
     down = null;
   });
 
-  // Mouse wheel -> scroll the phone (no need to touch it). Wheel down scrolls
-  // content down (finger swipes up), wheel up the reverse. Throttled so fast
-  // wheeling becomes a continuous scroll instead of a request flood.
   let wheelLock = false;
   let wheelAccum = 0;
   phoneScreenshot.addEventListener('wheel', (e) => {
@@ -497,10 +448,9 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
     if (wheelLock) return;
     wheelLock = true;
 
-    const dir = wheelAccum > 0 ? 1 : -1;   // 1 = scroll down
+    const dir = wheelAccum > 0 ? 1 : -1;
     wheelAccum = 0;
     const cx = 0.5;
-    // Swipe within a safe middle band (edges trigger Android system gestures).
     const y1 = dir > 0 ? 0.68 : 0.32;
     const y2 = dir > 0 ? 0.32 : 0.68;
     sendSwipe(cx, y1, cx, y2, 140).catch((err) => {
@@ -510,7 +460,6 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
   }, { passive: false });
 })();
 
-// ---- Screen recording -------------------------------------------------
 const btnRecord = document.getElementById('btn-record');
 const recordText = document.getElementById('record-text');
 let recordingActive = false;
@@ -548,7 +497,6 @@ if (btnRecord) {
   });
 }
 
-// ---- Install APK ----------------------------------------------------
 const btnInstallApk = document.getElementById('btn-install-apk');
 const apkFileInput = document.getElementById('apk-file-input');
 if (btnInstallApk && apkFileInput) {
@@ -583,7 +531,7 @@ async function fetchScreenshot() {
   try {
     const res = await fetch('/api/screenshot');
     const data = await res.json();
-    
+
     if (data.success) {
       phoneScreenshot.src = data.url;
       phoneScreenshot.classList.remove('hidden');
@@ -599,9 +547,6 @@ async function fetchScreenshot() {
   }
 }
 
-// ==========================================================================
-// Command Execution Trigger
-// ==========================================================================
 
 function submitCommand(opts = {}) {
   const text = cmdTextInput.value.trim();
@@ -623,9 +568,6 @@ cmdTextInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') submitCommand();
 });
 
-// ==========================================================================
-// PC Shutdown Sequence Dialogs
-// ==========================================================================
 
 function showShutdownOverlay(seconds) {
   shutdownOverlay.classList.remove('hidden');
@@ -644,9 +586,6 @@ btnAbortShutdown.addEventListener('click', () => {
   socket.send(JSON.stringify({ type: 'cancel_shutdown' }));
 });
 
-// ==========================================================================
-// Contacts CRUD Editor Panel
-// ==========================================================================
 
 let editingContactId = null;
 
@@ -774,9 +713,6 @@ async function deleteContact(id) {
 btnSaveContact.addEventListener('click', saveContact);
 contactPhoneInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveContact(); });
 
-// ==========================================================================
-// Settings Panel Form
-// ==========================================================================
 
 const cfgAutoUnlock = document.getElementById('cfg-auto-unlock');
 
@@ -785,8 +721,6 @@ async function fetchConfig() {
     const res = await fetch('/api/config');
     configData = await res.json();
 
-    // The server never sends the PIN back; leave the field blank (a placeholder
-    // note tells the user one is stored). Typing a new one replaces it.
     cfgPinInput.value = '';
     cfgPinInput.placeholder = configData.hasUnlockPin ? 'PIN saved — type to change' : 'Enter device unlock PIN code';
     if (cfgAutoUnlock) cfgAutoUnlock.checked = Boolean(configData.autoUnlock);
@@ -798,7 +732,6 @@ async function fetchConfig() {
 }
 
 async function saveConfig() {
-  // Send ONLY schema-allowed keys. An empty PIN field keeps the stored one.
   const body = {
     whatsappCoords: {
       x: parseFloat(cfgWxInput.value) || 0.91,
@@ -856,9 +789,6 @@ if (btnTestUnlock) {
   });
 }
 
-// ==========================================================================
-// Tab Navigations (supports multiple tabs)
-// ==========================================================================
 
 const tabMap = {
   'tab-btn-contacts': 'tab-content-contacts',
@@ -872,14 +802,12 @@ Object.keys(tabMap).forEach(btnId => {
   const btn = document.getElementById(btnId);
   if (btn) {
     btn.addEventListener('click', () => {
-      // Deactivate all tabs
       Object.keys(tabMap).forEach(id => {
         const tabBtn = document.getElementById(id);
         const tabContent = document.getElementById(tabMap[id]);
         if (tabBtn) tabBtn.classList.remove('active');
         if (tabContent) tabContent.classList.add('hidden');
       });
-      // Activate clicked tab
       btn.classList.add('active');
       const content = document.getElementById(tabMap[btnId]);
       if (content) content.classList.remove('hidden');
@@ -888,23 +816,16 @@ Object.keys(tabMap).forEach(btnId => {
   }
 });
 
-// ==========================================================================
-// Initial Boot
-// ==========================================================================
 
 fetchContacts();
 fetchConfig();
 
-// Query diagnostics state every 5 seconds
 setInterval(() => {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request_diagnostics' }));
   }
 }, 5000);
 
-// ==========================================================================
-// FEATURE 3: Sync Phone Contacts via ADB
-// ==========================================================================
 
 const btnSyncContacts = document.getElementById('btn-sync-contacts');
 if (btnSyncContacts) {
@@ -912,17 +833,16 @@ if (btnSyncContacts) {
     btnSyncContacts.disabled = true;
     btnSyncContacts.textContent = 'SYNCING...';
     appendTerminalLine('[CONTACTS] Initiating phone contacts sync via ADB...', 'system');
-    
+
     try {
       const res = await fetch('/api/sync-contacts', { method: 'POST' });
       const data = await res.json();
-      
+
       if (data.success) {
         appendTerminalLine(`[CONTACTS] Sync complete! ${data.totalSynced} found on device, ${data.newAdded} new contacts added. Total: ${data.totalContacts}`, 'adb-success');
         if (typeof window.vaniSpeak === 'function') {
           window.vaniSpeak(`Contacts synced. ${data.newAdded} new contacts imported from your phone.`);
         }
-        // Reload contacts list
         await fetchContacts();
       } else {
         throw new Error(data.error || 'Sync failed');
@@ -963,9 +883,6 @@ if (btnClearContacts) {
   });
 }
 
-// ==========================================================================
-// FEATURE 4: Wireless ADB Mode Toggle
-// ==========================================================================
 
 const btnWireless = document.getElementById('btn-wireless-toggle');
 const wirelessStatus = document.getElementById('wireless-status');
@@ -974,16 +891,15 @@ let isWirelessActive = false;
 if (btnWireless) {
   btnWireless.addEventListener('click', async () => {
     btnWireless.disabled = true;
-    
+
     if (!isWirelessActive) {
-      // Enable wireless
       btnWireless.textContent = 'ENABLING...';
       appendTerminalLine('[WIRELESS] Enabling wireless ADB mode...', 'system');
-      
+
       try {
         const res = await fetch('/api/wireless/enable', { method: 'POST' });
         const data = await res.json();
-        
+
         if (data.success) {
           isWirelessActive = true;
           appendTerminalLine(`[WIRELESS] Wireless ADB active at ${data.ip}:${data.port}. You can remove the USB cable now!`, 'adb-success');
@@ -1006,14 +922,13 @@ if (btnWireless) {
         }
       }
     } else {
-      // Disable wireless
       btnWireless.textContent = 'DISABLING...';
       appendTerminalLine('[WIRELESS] Disabling wireless ADB...', 'system');
-      
+
       try {
         const res = await fetch('/api/wireless/disable', { method: 'POST' });
         const data = await res.json();
-        
+
         isWirelessActive = false;
         if (wirelessStatus) {
           wirelessStatus.textContent = 'INACTIVE (USB ONLY)';
@@ -1026,7 +941,7 @@ if (btnWireless) {
         appendTerminalLine(`[WIRELESS] Disable failed: ${err.message}`, 'adb-error');
       }
     }
-    
+
     btnWireless.disabled = false;
   });
 }
