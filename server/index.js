@@ -116,7 +116,7 @@ console.log(AUTH_TOKEN
 const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
 const screenLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const mirrorLimiter = createRateLimiter({ windowMs: 60_000, max: 800 });   // ~10 fps frames
-const inputLimiter = createRateLimiter({ windowMs: 60_000, max: 240 });    // taps / swipes
+const inputLimiter = createRateLimiter({ windowMs: 60_000, max: 900 });    // taps / swipes / wheel-scroll
 app.use('/api', apiLimiter.middleware);
 
 // Login: exchange the shared token for a client-side session. Reachable

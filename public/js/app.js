@@ -432,9 +432,10 @@ function stopMirror() {
 btnLiveFeed.addEventListener('click', () => (mirrorTimer ? stopMirror() : startMirror()));
 if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
 
-// Click -> tap, drag -> swipe (normalized coords against the rendered image box).
+// Mirror input: click -> tap, drag -> swipe, mouse wheel -> scroll the phone.
 (function wireMirrorInput() {
   let down = null;
+
   function norm(e) {
     const r = phoneScreenshot.getBoundingClientRect();
     if (!r.width || !r.height) return null;
@@ -443,32 +444,70 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
       y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
     };
   }
+
+  async function sendSwipe(x1, y1, x2, y2, duration) {
+    await fetch('/api/mirror/swipe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x1, y1, x2, y2, duration })
+    });
+    setTimeout(pullMirrorFrame, 100);
+  }
+
+  // Stop the browser from starting its own image-drag while mirroring.
+  phoneScreenshot.setAttribute('draggable', 'false');
+  phoneScreenshot.addEventListener('dragstart', (e) => e.preventDefault());
+
   phoneScreenshot.addEventListener('pointerdown', (e) => {
     if (!mirrorTimer) return;
+    e.preventDefault();
+    try { phoneScreenshot.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     down = { pt: norm(e), t: Date.now() };
   });
+
   phoneScreenshot.addEventListener('pointerup', async (e) => {
     if (!mirrorTimer || !down || !down.pt) { down = null; return; }
+    try { phoneScreenshot.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
     const up = norm(e);
     const dist = up ? Math.hypot(up.x - down.pt.x, up.y - down.pt.y) : 0;
     try {
-      if (dist > 0.04) {
-        await fetch('/api/mirror/swipe', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x1: down.pt.x, y1: down.pt.y, x2: up.x, y2: up.y, duration: Math.min(600, Date.now() - down.t) })
-        });
+      if (dist > 0.03) {
+        await sendSwipe(down.pt.x, down.pt.y, up.x, up.y, Math.max(80, Math.min(500, Date.now() - down.t)));
       } else {
         await fetch('/api/mirror/tap', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x: down.pt.x, y: down.pt.y })
         });
+        setTimeout(pullMirrorFrame, 120);
       }
-      setTimeout(pullMirrorFrame, 120); // refresh so the result shows fast
     } catch (err) {
       appendTerminalLine(`[MIRROR] Input failed: ${err.message}`, 'adb-error');
     }
     down = null;
   });
+
+  // Mouse wheel -> scroll the phone (no need to touch it). Wheel down scrolls
+  // content down (finger swipes up), wheel up the reverse. Throttled so fast
+  // wheeling becomes a continuous scroll instead of a request flood.
+  let wheelLock = false;
+  let wheelAccum = 0;
+  phoneScreenshot.addEventListener('wheel', (e) => {
+    if (!mirrorTimer) return;
+    e.preventDefault();
+    wheelAccum += e.deltaY;
+    if (wheelLock) return;
+    wheelLock = true;
+
+    const dir = wheelAccum > 0 ? 1 : -1;   // 1 = scroll down
+    wheelAccum = 0;
+    const cx = 0.5;
+    // Swipe within a safe middle band (edges trigger Android system gestures).
+    const y1 = dir > 0 ? 0.68 : 0.32;
+    const y2 = dir > 0 ? 0.32 : 0.68;
+    sendSwipe(cx, y1, cx, y2, 140).catch((err) => {
+      appendTerminalLine(`[MIRROR] Scroll failed: ${err.message}`, 'adb-error');
+    });
+    setTimeout(() => { wheelLock = false; }, 170);
+  }, { passive: false });
 })();
 
 async function fetchScreenshot() {
