@@ -195,21 +195,20 @@ export async function pushFileToPhone(localPath, phoneDest = '/sdcard/Download')
  */
 export async function deletePhoneFile(phonePath, isDirectory = false) {
   try {
-    // Safety check: prevent deleting critical system paths
-    const protectedPaths = ['/', '/system', '/data', '/vendor', '/sdcard'];
-    if (protectedPaths.includes(phonePath)) {
-      throw new Error('Cannot delete protected system directory');
-    }
+    // normalizePhonePath already blocks '/', '/system', ... and (with
+    // allowSdcardRoot:false) '/sdcard' itself, plus '..' traversal and '\'.
+    const safePath = normalizePhonePath(phonePath, { allowSdcardRoot: false });
 
-    const cmd = isDirectory 
-      ? `${ADB} shell "rm -rf '${phonePath}'"` 
-      : `${ADB} shell "rm '${phonePath}'"`;
-    
-    await execAsync(cmd, { timeout: 15000 });
+    // execFile arg array + `--` end-of-options: no shell, no quoting games.
+    await execFileAsync(
+      getAdbPath(),
+      ['shell', 'rm', isDirectory ? '-rf' : '-f', '--', safePath],
+      { timeout: 15000 }
+    );
 
     return {
       success: true,
-      message: `Deleted: ${path.basename(phonePath)}`
+      message: `Deleted: ${path.posix.basename(safePath)}`
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -222,8 +221,9 @@ export async function deletePhoneFile(phonePath, isDirectory = false) {
  */
 export async function createPhoneDirectory(phonePath) {
   try {
-    await execAsync(`${ADB} shell "mkdir -p '${phonePath}'"`, { timeout: 5000 });
-    return { success: true, message: `Created directory: ${phonePath}` };
+    const safePath = normalizePhonePath(phonePath, { allowSdcardRoot: false });
+    await execFileAsync(getAdbPath(), ['shell', 'mkdir', '-p', '--', safePath], { timeout: 5000 });
+    return { success: true, message: `Created directory: ${safePath}` };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -234,7 +234,7 @@ export async function createPhoneDirectory(phonePath) {
  */
 export async function getStorageInfo() {
   try {
-    const { stdout } = await execAsync(`${ADB} shell "df /sdcard"`, { timeout: 5000 });
+    const { stdout } = await execFileAsync(getAdbPath(), ['shell', 'df', '/sdcard'], { timeout: 5000 });
     const lines = stdout.trim().split('\n');
     
     if (lines.length >= 2) {
