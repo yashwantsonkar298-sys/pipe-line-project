@@ -6,10 +6,13 @@
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node server/index.js"
+    "dev": "node --watch server/index.js",
+    "test": "node --test",
+    "check": "node --check server/index.js && npm test"
   },
   "dependencies": {
     "express": "^4.19.2",
+    "multer": "^2.2.0",
     "ws": "^8.16.0"
   }
 }

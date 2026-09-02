@@ -2,12 +2,20 @@
  * Hinglish/English Natural Language Command Parser for NexusFlow
  */
 
-let nlpContext = {
+// Fallback context used only when the caller does not supply a per-session one.
+const globalNlpContext = {
   lastContact: null,
   pendingAction: null
 };
 
-export function parseCommand(text, contacts = []) {
+export function parseCommand(text, contacts = [], context) {
+  // Per-session conversational memory. Defaults to a module-global for
+  // back-compat, but callers should pass `session.nlpContext` so pronoun /
+  // pending-action state is NOT shared across WebSocket clients.
+  const nlpContext = context && typeof context === 'object' ? context : globalNlpContext;
+  if (!('lastContact' in nlpContext)) nlpContext.lastContact = null;
+  if (!('pendingAction' in nlpContext)) nlpContext.pendingAction = null;
+
   let normalized = text.toLowerCase().trim();
   
   // Detect wake word variations (Vani, Wani, वाणी, वानी, etc.) at the beginning of the command
@@ -54,13 +62,33 @@ export function parseCommand(text, contacts = []) {
     }
   }
 
+  // --- SAFETY GUARDS ---
+  // An informational question ("how do I...", "what is...") or an explicit
+  // negation ("don't...", "mat karo") must never dispatch a destructive action.
+  const isInformationalQuery = /\b(how\s+(do|to|can|would|should|does)|what\s+(is|are|does|do)|can\s+you\s+(explain|tell)|explain\s+how|is\s+it\s+possible|kaise\s+(karu|karte|hota|hoti))\b/i.test(cleanedText);
+  const isNegatedRequest = /\bdon['’]?t\b|\bdo\s+not\b|\bnever\b|\bmat\s+kar|\bnahi\s+kar|\bmat\s+karna\b/i.test(cleanedText);
+  const blockDestructive = isInformationalQuery || isNegatedRequest;
+  if (blockDestructive) {
+    logDebug(`Safety guard: informational/negated phrasing detected -> destructive intents suppressed`);
+  }
+
+  // Standalone cancel/abort, even without a pending conversational action.
+  if (/^(cancel|cancel it|cancel karo|rehne do|rehnedo|chhod do|chhodo|ruko|abort|stop it|nevermind|never mind)$/i.test(cleanedText.trim())) {
+    nlpContext.pendingAction = null;
+    return {
+      intent: 'CANCEL',
+      pipeline: ['Input Received', wakeWordPrefix + 'NLP (CANCEL)'],
+      details: { wakeWordDetected }
+    };
+  }
+
   // 1. Detect Shutdown Intent
   const shutdownKeywords = [
-    'shutdown pc', 'shutdown computer', 'turn off pc', 'turn off computer', 
-    'power off pc', 'pc shutdown', 'pc band', 'computer band', 'system band', 
+    'shutdown pc', 'shutdown computer', 'turn off pc', 'turn off computer',
+    'power off pc', 'pc shutdown', 'pc band', 'computer band', 'system band',
     'computer shutdown', 'laptop shutdown', 'shutdown my pc', 'pc ko shutdown'
   ];
-  if (shutdownKeywords.some(keyword => cleanedText.includes(keyword))) {
+  if (!blockDestructive && shutdownKeywords.some(keyword => cleanedText.includes(keyword))) {
     return {
       intent: 'SHUTDOWN',
       pipeline: ['Input Received', wakeWordPrefix + 'NLP Intent Extracted (SHUTDOWN)', 'OS Trigger compiled', 'Shutdown Initiated'],
@@ -74,7 +102,7 @@ export function parseCommand(text, contacts = []) {
     'phone unlock', 'mobile unlock', 'lock kholo', 'unlock kar', 'screen unlock',
     'password unlock'
   ];
-  if (unlockKeywords.some(keyword => cleanedText.includes(keyword))) {
+  if (!blockDestructive && unlockKeywords.some(keyword => cleanedText.includes(keyword))) {
     return {
       intent: 'UNLOCK',
       pipeline: ['Input Received', wakeWordPrefix + 'NLP Intent Extracted (UNLOCK)', 'ADB Check', 'ADB Swipe Command', 'PIN Submission'],
@@ -313,8 +341,10 @@ export function parseCommand(text, contacts = []) {
     };
   }
 
-  // 7. Fallback logic: If name and number are matched, default to call unless whatsapp is implied
-  if (targetNumber) {
+  // 7. Fallback logic: a resolved contact/number ALONE is not an instruction.
+  // Require an explicit action verb (call / message) before dispatching, so a
+  // bare name or number never silently places a call.
+  if (targetNumber && (isCall || isWhatsApp)) {
     if (isWhatsApp) {
       return {
         intent: 'WHATSAPP',

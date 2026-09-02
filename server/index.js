@@ -5,47 +5,29 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
-import { promisify } from 'util';
+import { randomUUID } from 'node:crypto';
+import multer from 'multer';
 
 // Import our custom modules
-import { 
-  ensureAdbInstalled, 
-  getDeviceDiagnostics, 
-  unlockPhone, 
-  makeCall, 
-  sendWhatsAppMessage, 
-  openWhatsAppChat,
-  typeText,
-  tapWhatsAppSend,
-  tapWhatsAppCall,
-  tapWhatsAppVideoCall,
-  searchAndOpenWhatsAppContact,
-  captureScreen, 
+import {
+  ensureAdbInstalled,
+  getDeviceDiagnostics,
+  captureScreen,
   setLogCallback,
   syncPhoneContacts,
   enableWirelessAdb,
-  disableWirelessAdb,
-  volumeUp,
-  volumeDown,
-  volumeMute,
-  setBrightness,
-  toggleFlashlight,
-  openApp,
-  openUrl,
-  toggleWifi,
-  toggleBluetooth,
-  takePhoto,
-  mediaPlayPause,
-  mediaNext,
-  mediaPrevious,
-  pressHome,
-  pressBack,
-  openRecents,
-  openNotifications
+  disableWirelessAdb
 } from './adb.js';
-import { parseCommand } from './nlp.js';
+import { configurePipeline, runCommandText } from './pipeline.js';
+import {
+  listPhoneFiles,
+  pullFileFromPhone,
+  pushFileToPhone,
+  deletePhoneFile,
+  createPhoneDirectory,
+  getStorageInfo
+} from './fileTransfer.js';
 
-const execAsync = promisify(exec);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 
@@ -196,6 +178,130 @@ app.post('/api/wireless/disable', async (req, res) => {
   }
 });
 
+// ==========================================================================
+// FILE TRANSFER SYSTEM (Phase 1)
+// ==========================================================================
+
+// Setup multer for file uploads
+const uploadsDir = path.join(__dirname, '../uploads');
+const downloadsDir = path.join(__dirname, '../downloads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+
+const upload = multer({ 
+  dest: uploadsDir,
+  limits: { fileSize: 500 * 1024 * 1024 } // 500MB max
+});
+
+// Browse phone files
+app.get('/api/files/list', async (req, res) => {
+  try {
+    const phonePath = req.query.path || '/sdcard';
+    const result = await listPhoneFiles(phonePath);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Upload file to phone (PC → Phone)
+app.post('/api/files/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file provided' });
+    }
+    
+    const phoneDest = req.body.destination || '/sdcard/Download';
+    const originalName = req.file.originalname;
+    
+    // Rename temp file to original name
+    const renamedPath = path.join(uploadsDir, originalName);
+    fs.renameSync(req.file.path, renamedPath);
+    
+    // Push to phone
+    const result = await pushFileToPhone(renamedPath, phoneDest);
+    
+    // Clean up uploaded file from PC
+    try { fs.unlinkSync(renamedPath); } catch (e) { /* ignore */ }
+    
+    // Broadcast progress to all WS clients
+    broadcast({ type: 'file_transfer_complete', action: 'upload', result });
+    
+    res.json(result);
+  } catch (error) {
+    // Clean up on error
+    if (req.file && fs.existsSync(req.file.path)) {
+      try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Download file from phone (Phone → PC)
+app.get('/api/files/download', async (req, res) => {
+  try {
+    const phonePath = req.query.path;
+    if (!phonePath) {
+      return res.status(400).json({ error: 'No file path specified' });
+    }
+    
+    const result = await pullFileFromPhone(phonePath, downloadsDir);
+    
+    if (result.success) {
+      // Send file to browser for download
+      res.download(result.localPath, result.fileName, (err) => {
+        // Clean up after download
+        try { fs.unlinkSync(result.localPath); } catch (e) { /* ignore */ }
+      });
+    } else {
+      res.status(500).json(result);
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete file on phone
+app.delete('/api/files/delete', async (req, res) => {
+  try {
+    const { path: filePath, isDirectory } = req.body;
+    if (!filePath) {
+      return res.status(400).json({ error: 'No file path specified' });
+    }
+    
+    const result = await deletePhoneFile(filePath, isDirectory);
+    broadcast({ type: 'file_transfer_complete', action: 'delete', result });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create directory on phone
+app.post('/api/files/mkdir', async (req, res) => {
+  try {
+    const { path: dirPath } = req.body;
+    if (!dirPath) {
+      return res.status(400).json({ error: 'No directory path specified' });
+    }
+    
+    const result = await createPhoneDirectory(dirPath);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get storage info
+app.get('/api/files/storage', async (req, res) => {
+  try {
+    const result = await getStorageInfo();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Setup server and WebSockets
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -217,7 +323,16 @@ setLogCallback((logObj) => {
 
 wss.on('connection', (ws) => {
   console.log('[WS] Client connected');
-  
+
+  // Per-connection session: conversational NLP memory is isolated here so it is
+  // never shared across clients. `requireConfirm` is tightened in P0 auth wiring.
+  ws.session = {
+    id: randomUUID(),
+    nlpContext: { lastContact: null, pendingAction: null },
+    requireConfirm: false,
+    confirm: undefined
+  };
+
   // Send immediate ADB status update
   getDeviceDiagnostics().then(diagnostics => {
     ws.send(JSON.stringify({ type: 'diagnostics', data: diagnostics }));
@@ -226,16 +341,15 @@ wss.on('connection', (ws) => {
   ws.on('message', async (messageData) => {
     try {
       const payload = JSON.parse(messageData);
-      
+
       if (payload.type === 'execute_command') {
-        const commandText = payload.command;
-        await executePipeline(commandText);
-      } 
-      
+        await runCommandText(String(payload.command || ''), ws.session);
+      }
+
       else if (payload.type === 'cancel_shutdown') {
         cancelPcShutdown();
       }
-      
+
       else if (payload.type === 'request_diagnostics') {
         const diagnostics = await getDeviceDiagnostics();
         ws.send(JSON.stringify({ type: 'diagnostics', data: diagnostics }));
@@ -249,274 +363,6 @@ wss.on('connection', (ws) => {
     console.log('[WS] Client disconnected');
   });
 });
-
-/**
- * Executes the entire parsed intent pipeline step-by-step
- */
-async function executePipeline(commandText) {
-  broadcast({ type: 'pipeline_start', command: commandText });
-
-  // Read current configuration and contacts
-  let contacts = [];
-  let config = { unlockPin: '', whatsappCoords: { x: 0.91, y: 0.55 } };
-  
-  try {
-    contacts = JSON.parse(fs.readFileSync(CONTACTS_FILE, 'utf8'));
-    config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-  } catch (e) {
-    console.error('Failed to parse database files', e);
-  }
-
-  // Step 1: NLP Intent Extraction
-  broadcast({ type: 'pipeline_step', step: 0, status: 'pending', message: 'Parsing natural language intent...' });
-  await new Promise(resolve => setTimeout(resolve, 800)); // Dramatic speed effect
-
-  const parsed = parseCommand(commandText, contacts);
-  
-  if (parsed.details && parsed.details.wakeWordDetected) {
-    broadcast({ 
-      type: 'adb_log', 
-      log: { 
-        type: 'success', 
-        message: `[WAKE WORD] Wake word 'Vani' authenticated! Triggering automated pipelines...` 
-      } 
-    });
-  }
-  
-  if (parsed.intent === 'UNKNOWN') {
-    broadcast({ 
-      type: 'pipeline_step', 
-      step: 0, 
-      status: 'failed', 
-      message: `Failed to extract intent from command: "${commandText}"` 
-    });
-    broadcast({ type: 'pipeline_end', success: false, error: 'Command not recognized' });
-    return;
-  }
-
-  broadcast({ 
-    type: 'pipeline_step', 
-    step: 0, 
-    status: 'success', 
-    message: `Intent detected: ${parsed.intent}. Pipeline structured: [${parsed.pipeline.join(' ➔ ')}]` 
-  });
-  
-  // Step 2: Contact Resolution / Parameter Extraction
-  broadcast({ type: 'pipeline_step', step: 1, status: 'pending', message: 'Verifying command parameters...' });
-  await new Promise(resolve => setTimeout(resolve, 600));
-
-  if (parsed.intent === 'CALL' || parsed.intent === 'WHATSAPP') {
-    if (!parsed.details.number) {
-      broadcast({ 
-        type: 'pipeline_step', 
-        step: 1, 
-        status: 'failed', 
-        message: `Contact or phone number could not be resolved from command.` 
-      });
-      broadcast({ type: 'pipeline_end', success: false, error: 'Unresolved phone number' });
-      return;
-    }
-    broadcast({ 
-      type: 'pipeline_step', 
-      step: 1, 
-      status: 'success', 
-      message: `Resolved Contact: ${parsed.details.name || 'Raw Number'} (${parsed.details.number})` 
-    });
-  } else {
-    broadcast({ 
-      type: 'pipeline_step', 
-      step: 1, 
-      status: 'success', 
-      message: `Parameters resolved: Target device is ${parsed.details.target}` 
-    });
-  }
-
-  // Step 3: Device / System Handshake
-  broadcast({ type: 'pipeline_step', step: 2, status: 'pending', message: 'Checking execution endpoint state...' });
-  
-  if (parsed.intent === 'SHUTDOWN') {
-    // Local PC command has no ADB dependency
-    broadcast({ type: 'pipeline_step', step: 2, status: 'success', message: 'PC System online. Proceeding...' });
-  } else {
-    // ADB check
-    const diagnostics = await getDeviceDiagnostics();
-    if (!diagnostics.connected) {
-      broadcast({ 
-        type: 'pipeline_step', 
-        step: 2, 
-        status: 'failed', 
-        message: 'Device disconnected! Ensure phone is connected via Type-C USB cable and USB Debugging is ON.' 
-      });
-      broadcast({ type: 'pipeline_end', success: false, error: 'Mobile device not connected' });
-      return;
-    }
-    broadcast({ 
-      type: 'pipeline_step', 
-      step: 2, 
-      status: 'success', 
-      message: `Connected to ${diagnostics.brand} ${diagnostics.model} via ADB (USB status: Active)` 
-    });
-  }
-
-  // Step 4: Compiling script commands
-  broadcast({ type: 'pipeline_step', step: 3, status: 'pending', message: 'Compiling automation script execution vectors...' });
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
-  let commandSummary = '';
-  if (parsed.intent === 'SHUTDOWN') {
-    commandSummary = 'shutdown /s /t 10';
-  } else if (parsed.intent === 'UNLOCK') {
-    commandSummary = `input keyevent 82 && input text ${config.unlockPin || '****'} && input keyevent 66`;
-  } else if (parsed.intent === 'CALL') {
-    commandSummary = `am start -a android.intent.action.CALL -d tel:${parsed.details.number}`;
-  } else if (parsed.intent === 'WHATSAPP') {
-    commandSummary = `am start -a android.intent.action.VIEW -d "whatsapp://send?phone=${parsed.details.number}" && input tap ${config.whatsappCoords.x}, ${config.whatsappCoords.y}`;
-  } else if (parsed.intent === 'WHATSAPP_OPEN_CHAT') {
-    commandSummary = `am start -a android.intent.action.VIEW -d "whatsapp://send?phone=${parsed.details.number}"`;
-  } else if (parsed.intent === 'WHATSAPP_TYPE_MESSAGE') {
-    commandSummary = `input text "${parsed.details.message}"`;
-  } else if (parsed.intent === 'WHATSAPP_SEND_MESSAGE') {
-    commandSummary = `input keyevent 66`;
-  } else if (parsed.intent === 'WHATSAPP_AUDIO_CALL') {
-    commandSummary = `input tap [call_button]`;
-  }
-
-  broadcast({ type: 'pipeline_step', step: 3, status: 'success', message: `Script compiled successfully: ${commandSummary}` });
-
-  // Step 5: Execution Engine Action
-  broadcast({ type: 'pipeline_step', step: 4, status: 'pending', message: 'Executing instruction pipeline...' });
-
-  try {
-    let ttsMessage = '';
-    
-    if (parsed.intent === 'SHUTDOWN') {
-      startPcShutdown();
-      ttsMessage = 'Warning! Initiating computer shutdown sequence. You have 10 seconds to abort.';
-    } else if (parsed.intent === 'UNLOCK') {
-      const unlockResult = await unlockPhone(config.unlockPin);
-      if (unlockResult.alreadyUnlocked) {
-        ttsMessage = 'Phone is already unlocked. No action needed.';
-      } else {
-        ttsMessage = 'Phone unlock sequence completed successfully.';
-      }
-    } else if (parsed.intent === 'CALL') {
-      await makeCall(parsed.details.number);
-      ttsMessage = `Calling ${parsed.details.name || 'the number'} now on your device.`;
-    } else if (parsed.intent === 'WHATSAPP') {
-      await sendWhatsAppMessage(parsed.details.number, parsed.details.message, config.whatsappCoords);
-      ttsMessage = `WhatsApp message sent to ${parsed.details.name || 'the contact'}.`;
-    } else if (parsed.intent === 'WHATSAPP_OPEN_CHAT') {
-      if (parsed.details.number) {
-        await openWhatsAppChat(parsed.details.number);
-      } else {
-        await searchAndOpenWhatsAppContact(parsed.details.name);
-      }
-      ttsMessage = `WhatsApp chat opened for ${parsed.details.name}. What would you like to type?`;
-    } else if (parsed.intent === 'WHATSAPP_TYPE_MESSAGE') {
-      await typeText(parsed.details.message);
-      ttsMessage = `Message typed. Say "Vani send message" to send it.`;
-    } else if (parsed.intent === 'WHATSAPP_SEND_MESSAGE') {
-      await tapWhatsAppSend();
-      ttsMessage = `Message sent on WhatsApp!`;
-    } else if (parsed.intent === 'WHATSAPP_ASK_CALL_TYPE') {
-      ttsMessage = `Aap ${parsed.details.name || 'ko'} audio call karna chahte hain ya video call?`;
-    } else if (parsed.intent === 'WHATSAPP_AUDIO_CALL') {
-      if (parsed.details.name) {
-        await searchAndOpenWhatsAppContact(parsed.details.name);
-      }
-      await tapWhatsAppCall();
-      ttsMessage = `Initiating audio call to ${parsed.details.name || 'the contact'}.`;
-    } else if (parsed.intent === 'WHATSAPP_VIDEO_CALL') {
-      if (parsed.details.name) {
-        await searchAndOpenWhatsAppContact(parsed.details.name);
-      }
-      await tapWhatsAppVideoCall();
-      ttsMessage = `Initiating video call to ${parsed.details.name || 'the contact'}.`;
-    } else if (parsed.intent === 'CANCEL') {
-      ttsMessage = `Okay, maine cancel kar diya.`;
-    } else if (parsed.intent === 'VOLUME_UP') {
-      await volumeUp();
-      ttsMessage = 'Volume increased.';
-    } else if (parsed.intent === 'VOLUME_DOWN') {
-      await volumeDown();
-      ttsMessage = 'Volume decreased.';
-    } else if (parsed.intent === 'MUTE') {
-      await volumeMute();
-      ttsMessage = 'Phone muted.';
-    } else if (parsed.intent === 'BRIGHTNESS') {
-      await setBrightness(parsed.details.level);
-      ttsMessage = `Brightness set to ${parsed.details.level > 200 ? 'maximum' : parsed.details.level < 50 ? 'minimum' : 'adjusted level'}.`;
-    } else if (parsed.intent === 'FLASHLIGHT') {
-      await toggleFlashlight(parsed.details.state);
-      ttsMessage = `Flashlight turned ${parsed.details.state ? 'on' : 'off'}.`;
-    } else if (parsed.intent === 'OPEN_APP') {
-      await openApp(parsed.details.appName);
-      ttsMessage = `Opening ${parsed.details.appName} on your phone.`;
-    } else if (parsed.intent === 'OPEN_URL') {
-      await openUrl(parsed.details.url);
-      ttsMessage = `Opening website in browser.`;
-    } else if (parsed.intent === 'WIFI_ON') {
-      await toggleWifi(true);
-      ttsMessage = 'WiFi has been turned on.';
-    } else if (parsed.intent === 'WIFI_OFF') {
-      await toggleWifi(false);
-      ttsMessage = 'WiFi has been turned off.';
-    } else if (parsed.intent === 'BLUETOOTH_ON') {
-      await toggleBluetooth(true);
-      ttsMessage = 'Bluetooth has been enabled.';
-    } else if (parsed.intent === 'BLUETOOTH_OFF') {
-      await toggleBluetooth(false);
-      ttsMessage = 'Bluetooth has been disabled.';
-    } else if (parsed.intent === 'TAKE_PHOTO') {
-      await takePhoto();
-      ttsMessage = 'Photo captured successfully.';
-    } else if (parsed.intent === 'MEDIA_PLAY') {
-      await mediaPlayPause();
-      ttsMessage = 'Media playback toggled.';
-    } else if (parsed.intent === 'MEDIA_NEXT') {
-      await mediaNext();
-      ttsMessage = 'Skipped to next track.';
-    } else if (parsed.intent === 'MEDIA_PREV') {
-      await mediaPrevious();
-      ttsMessage = 'Playing previous track.';
-    } else if (parsed.intent === 'HOME') {
-      await pressHome();
-      ttsMessage = 'Home screen activated.';
-    } else if (parsed.intent === 'BACK') {
-      await pressBack();
-      ttsMessage = 'Navigated back.';
-    } else if (parsed.intent === 'RECENTS') {
-      await openRecents();
-      ttsMessage = 'Recent apps opened.';
-    } else if (parsed.intent === 'NOTIFICATIONS') {
-      await openNotifications();
-      ttsMessage = 'Notification shade opened.';
-    } else if (parsed.intent === 'GOD_MODE') {
-      broadcast({ type: 'pipeline_step', step: 4, status: 'pending', message: 'Executing GOD_MODE rapid override...' });
-      await toggleWifi(true);
-      await setBrightness(255);
-      await toggleFlashlight(true);
-      await openApp('camera');
-      await takePhoto();
-      await mediaPlayPause();
-      ttsMessage = 'God mode sequence executed. System override complete.';
-    }
-
-
-    broadcast({ type: 'pipeline_step', step: 4, status: 'success', message: 'Execution completed. Action transmitted.' });
-    broadcast({ type: 'pipeline_end', success: true, ttsMessage });
-    
-    // Auto-update diagnostics after action
-    setTimeout(async () => {
-      const diagnostics = await getDeviceDiagnostics();
-      broadcast({ type: 'diagnostics', data: diagnostics });
-    }, 4000);
-
-  } catch (error) {
-    broadcast({ type: 'pipeline_step', step: 4, status: 'failed', message: `Execution failed: ${error.message}` });
-    broadcast({ type: 'pipeline_end', success: false, error: error.message, ttsMessage: `Pipeline failed. ${error.message}` });
-  }
-}
 
 /**
  * Initiates 10-second PC Shutdown sequence with abort option
@@ -562,6 +408,9 @@ function cancelPcShutdown() {
     console.log('[SYSTEM] PC Shutdown sequence cancelled by user.');
   }
 }
+
+// Give the command pipeline its transport + PC-shutdown trigger.
+configurePipeline({ broadcast, startPcShutdown });
 
 // ==========================================================================
 // Autonomous System Health Poller
