@@ -37,7 +37,9 @@ import {
   readContacts,
   writeContacts,
   getAuthToken,
-  getAllowedOrigins
+  getAllowedOrigins,
+  RUNTIME_DIR,
+  ensureRuntimeDir
 } from './config/index.js';
 import {
   listPhoneFiles,
@@ -89,6 +91,7 @@ console.log(AUTH_TOKEN
   : '[SECURITY] Local-only mode: remote clients are refused. Set NEXUSFLOW_AUTH_TOKEN for LAN access.');
 
 const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
+const screenLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 app.use('/api', apiLimiter.middleware);
 
 // Login: exchange the shared token for a client-side session. Reachable
@@ -175,14 +178,25 @@ app.get('/api/diagnostics', async (req, res) => {
   }
 });
 
+// Capture a screenshot into the private runtime dir (NOT public/) and hand back
+// an authenticated URL. The PNG is never served by express.static.
+const SCREENSHOT_PATH = path.join(RUNTIME_DIR, 'screen.png');
 app.get('/api/screenshot', async (req, res) => {
   try {
-    const screenshotPath = path.join(__dirname, '../public/screen.png');
-    await captureScreen(screenshotPath);
-    res.json({ success: true, url: '/screen.png?t=' + Date.now() });
+    ensureRuntimeDir();
+    await captureScreen(SCREENSHOT_PATH);
+    res.json({ success: true, url: '/api/screen/current?t=' + Date.now() });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+app.get('/api/screen/current', screenLimiter.middleware, (req, res) => {
+  if (!fs.existsSync(SCREENSHOT_PATH)) {
+    return res.status(404).json({ error: 'No screenshot captured yet' });
+  }
+  res.set('Cache-Control', 'no-store');
+  res.type('png').sendFile(SCREENSHOT_PATH);
 });
 
 // FEATURE 3: Sync contacts from connected phone
@@ -282,13 +296,19 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     }
     
     const phoneDest = req.body.destination || '/sdcard/Download';
-    const originalName = req.file.originalname;
-    
-    // Rename temp file to original name
-    const renamedPath = path.join(uploadsDir, originalName);
+
+    // NEVER build a path from the client-supplied name: strip to a safe
+    // basename so "../../evil.sh" cannot escape uploadsDir.
+    const safeName = path.basename(String(req.file.originalname || 'upload'))
+      .replace(/[^A-Za-z0-9._-]/g, '_')
+      .slice(0, 200) || 'upload';
+    const renamedPath = path.join(uploadsDir, safeName);
+    if (path.dirname(path.resolve(renamedPath)) !== path.resolve(uploadsDir)) {
+      throw new Error('Rejected upload path');
+    }
     fs.renameSync(req.file.path, renamedPath);
-    
-    // Push to phone
+
+    // Push to phone (pushFileToPhone re-validates phoneDest via normalizePhonePath)
     const result = await pushFileToPhone(renamedPath, phoneDest);
     
     // Clean up uploaded file from PC
