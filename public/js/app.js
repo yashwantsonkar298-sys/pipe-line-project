@@ -70,6 +70,18 @@ socket.addEventListener('message', (event) => {
       appendTerminalLine(data.log.message, `adb-${data.log.type}`);
       break;
 
+    case 'confirm_request': {
+      const approved = window.confirm(`Confirm action:\n\n${data.summary}`);
+      socket.send(JSON.stringify({ type: 'confirm_action', id: data.id, approved }));
+      appendTerminalLine(`[CONFIRM] ${data.summary} -> ${approved ? 'approved' : 'declined'}`, approved ? 'adb-success' : 'adb-warning');
+      break;
+    }
+
+    case 'command_queued':
+    case 'job_event':
+      // surfaced in the pipeline/terminal already; no-op for now
+      break;
+
     case 'pipeline_start':
       resetPipelineNodes();
       appendTerminalLine(`[PIPELINE START] Instruction: "${data.command}"`, 'adb-info');
@@ -544,23 +556,33 @@ async function saveConfig() {
 btnSaveConfig.addEventListener('click', saveConfig);
 
 // ==========================================================================
-// Tab Navigations
+// Tab Navigations (supports multiple tabs)
 // ==========================================================================
 
-tabBtnContacts.addEventListener('click', () => {
-  tabBtnContacts.classList.add('active');
-  tabBtnSettings.classList.remove('active');
-  tabContentContacts.classList.remove('hidden');
-  tabContentSettings.classList.add('hidden');
-  drawConnectorPaths();
-});
+const tabMap = {
+  'tab-btn-contacts': 'tab-content-contacts',
+  'tab-btn-files': 'tab-content-files',
+  'tab-btn-settings': 'tab-content-settings'
+};
 
-tabBtnSettings.addEventListener('click', () => {
-  tabBtnSettings.classList.add('active');
-  tabBtnContacts.classList.remove('active');
-  tabContentSettings.classList.remove('hidden');
-  tabContentContacts.classList.add('hidden');
-  drawConnectorPaths();
+Object.keys(tabMap).forEach(btnId => {
+  const btn = document.getElementById(btnId);
+  if (btn) {
+    btn.addEventListener('click', () => {
+      // Deactivate all tabs
+      Object.keys(tabMap).forEach(id => {
+        const tabBtn = document.getElementById(id);
+        const tabContent = document.getElementById(tabMap[id]);
+        if (tabBtn) tabBtn.classList.remove('active');
+        if (tabContent) tabContent.classList.add('hidden');
+      });
+      // Activate clicked tab
+      btn.classList.add('active');
+      const content = document.getElementById(tabMap[btnId]);
+      if (content) content.classList.remove('hidden');
+      drawConnectorPaths();
+    });
+  }
 });
 
 // ==========================================================================

@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import multer from 'multer';
 
 // Import our custom modules
@@ -20,7 +20,14 @@ import {
 import { getDiagnostics, currentDeviceKey, invalidateDiagnostics } from './deviceState.js';
 import { JobQueue } from './jobQueue.js';
 import { configurePipeline, runCommandText } from './pipeline.js';
-import { assertJsonSchema, sendSafeError } from './security.js';
+import {
+  assertJsonSchema,
+  sendSafeError,
+  createHttpAccessMiddleware,
+  createRateLimiter,
+  authorizeWebSocketUpgrade,
+  isRequestFromLoopback
+} from './security.js';
 import {
   CONFIG_SCHEMA,
   CONTACTS_SCHEMA,
@@ -28,7 +35,9 @@ import {
   writeConfig,
   mergeConfig,
   readContacts,
-  writeContacts
+  writeContacts,
+  getAuthToken,
+  getAllowedOrigins
 } from './config/index.js';
 import {
   listPhoneFiles,
@@ -64,12 +73,52 @@ if (!fs.existsSync(CONFIG_FILE)) {
 }
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
+
+// -------------------------------------------------------------------------
+// Access control (P0-1)
+//   NEXUSFLOW_AUTH_TOKEN set  -> every /api call needs `Authorization: Bearer`,
+//                                every WS upgrade needs `?token=`.
+//   not set (default)         -> loopback clients only; the LAN cannot reach
+//                                the API or the WebSocket at all.
+// -------------------------------------------------------------------------
+const AUTH_TOKEN = getAuthToken();
+const ALLOWED_ORIGINS = getAllowedOrigins(process.env, PORT);
+console.log(AUTH_TOKEN
+  ? '[SECURITY] Token auth ENABLED (NEXUSFLOW_AUTH_TOKEN set).'
+  : '[SECURITY] Local-only mode: remote clients are refused. Set NEXUSFLOW_AUTH_TOKEN for LAN access.');
+
+const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
+app.use('/api', apiLimiter.middleware);
+
+// Login: exchange the shared token for a client-side session. Reachable
+// without auth so a fresh browser can authenticate.
+app.post('/api/auth/login', express.json({ limit: '4kb' }), (req, res) => {
+  if (!AUTH_TOKEN) return res.json({ ok: true, mode: 'local-only' });
+  const supplied = typeof req.body?.token === 'string' ? req.body.token : '';
+  const ok = supplied.length === AUTH_TOKEN.length && timingSafeStrEqual(supplied, AUTH_TOKEN);
+  if (!ok) return res.status(401).json({ ok: false, error: 'Invalid token' });
+  return res.json({ ok: true, mode: 'token' });
+});
+app.get('/api/auth/status', (req, res) => {
+  res.json({ authRequired: Boolean(AUTH_TOKEN) });
+});
+
+// Everything else under /api requires auth (bearer) or a loopback client.
+app.use('/api', createHttpAccessMiddleware({ authToken: AUTH_TOKEN }));
+
 app.use(express.static(path.join(__dirname, '../public')));
 
 // Global state for PC shutdown timer
 let shutdownTimer = null;
 let shutdownTimeLeft = 10;
+
+function timingSafeStrEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 
 // HTTP API Routes
 app.get('/api/contacts', (req, res) => {
@@ -325,7 +374,28 @@ app.get('/api/files/storage', async (req, res) => {
 
 // Setup server and WebSockets
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ noServer: true });
+
+// Authorize every WebSocket upgrade the same way as /api: bearer token via
+// `?token=` when configured, otherwise loopback only. Also enforces an Origin
+// allowlist so a random web page cannot open a socket to the daemon.
+server.on('upgrade', (req, socket, head) => {
+  const result = authorizeWebSocketUpgrade(req, {
+    authToken: AUTH_TOKEN,
+    allowedOrigins: ALLOWED_ORIGINS,
+    tokenParam: 'token'
+  });
+  if (!result.ok) {
+    socket.write(`HTTP/1.1 ${result.statusCode} ${result.code}\r\n\r\n`);
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    ws._req = req;
+    ws._loopback = isRequestFromLoopback(req);
+    wss.emit('connection', ws, req);
+  });
+});
 
 // Broadcast helper
 function broadcast(data) {
@@ -356,15 +426,42 @@ async function enqueueCommand(text, session, meta = {}) {
 }
 
 wss.on('connection', (ws) => {
-  console.log('[WS] Client connected');
+  const loopback = ws._loopback !== false;
+  console.log(`[WS] Client connected (${loopback ? 'loopback' : 'remote'})`);
+
+  // Pending confirmation round-trips for THIS socket, keyed by request id.
+  const pendingConfirms = new Map();
+
+  /**
+   * Ask the client to approve a destructive action. Resolves false on decline
+   * or after 45s of silence. Used for AI-initiated calls and every command
+   * from a non-loopback client.
+   */
+  function confirm(summary) {
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingConfirms.delete(id);
+        resolve(false);
+      }, 45_000);
+      pendingConfirms.set(id, (approved) => {
+        clearTimeout(timer);
+        pendingConfirms.delete(id);
+        resolve(Boolean(approved));
+      });
+      ws.send(JSON.stringify({ type: 'confirm_request', id, summary }));
+    });
+  }
 
   // Per-connection session: conversational NLP memory is isolated here so it is
-  // never shared across clients. `requireConfirm` is tightened in P0 auth wiring.
+  // never shared across clients. Remote clients must confirm destructive actions;
+  // a local typed command keeps today's instant behaviour (shutdown still has
+  // its own 10s abort window).
   ws.session = {
     id: randomUUID(),
     nlpContext: { lastContact: null, pendingAction: null },
-    requireConfirm: false,
-    confirm: undefined
+    requireConfirm: !loopback,
+    confirm
   };
 
   // Send immediate ADB status update
@@ -379,6 +476,11 @@ wss.on('connection', (ws) => {
       if (payload.type === 'execute_command') {
         const snapshot = await enqueueCommand(String(payload.command || ''), ws.session);
         ws.send(JSON.stringify({ type: 'command_queued', job: snapshot }));
+      }
+
+      else if (payload.type === 'confirm_action') {
+        const resolver = pendingConfirms.get(String(payload.id || ''));
+        if (resolver) resolver(payload.approved === true);
       }
 
       else if (payload.type === 'cancel_shutdown') {
@@ -399,6 +501,8 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    for (const resolver of pendingConfirms.values()) resolver(false);
+    pendingConfirms.clear();
     console.log('[WS] Client disconnected');
   });
 });
@@ -484,13 +588,15 @@ setInterval(async () => {
 server.listen(PORT, () => {
   console.log(`\n[SERVER] NexusFlow v7.5 Pro-Max Running at http://localhost:${PORT}`);
   ensureAdbInstalled().catch(console.error);
-  
-  // Automatically open Google Chrome to ensure Web Speech API compatibility
+
+  // Auto-launch Chrome for Web Speech API support. Opt out with
+  // NEXUSFLOW_NO_BROWSER=1 (tests, headless hosts, or personal preference).
+  if (process.env.NEXUSFLOW_NO_BROWSER === '1' || process.platform !== 'win32') return;
   exec(`start chrome http://localhost:${PORT}`, (err) => {
     if (err) {
       console.log('[SERVER] Notice: Could not auto-launch Chrome. Please open it manually if needed.');
     } else {
-      console.log('[SERVER] Successfully auto-launched Google Chrome for Max-Level Voice API support.');
+      console.log('[SERVER] Auto-launched Google Chrome.');
     }
   });
 });
