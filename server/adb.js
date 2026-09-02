@@ -1,10 +1,11 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BIN_DIR = path.join(__dirname, 'bin');
 const LOCAL_ADB_DIR = path.join(BIN_DIR, 'platform-tools');
@@ -71,9 +72,12 @@ export async function ensureAdbInstalled() {
     fs.writeFileSync(zipPath, Buffer.from(buffer));
     log('Download completed. Extracting archive...', 'info');
 
-    // Extract using Windows PowerShell Expand-Archive (built-in, zero dependencies)
-    const powerShellCmd = `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${BIN_DIR}' -Force"`;
-    await execAsync(powerShellCmd);
+    // Extract using Windows PowerShell Expand-Archive (built-in, zero dependencies).
+    // execFile + argv array: no shell, paths passed as discrete arguments.
+    await execFileAsync('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      'Expand-Archive', '-Path', zipPath, '-DestinationPath', BIN_DIR, '-Force'
+    ]);
     log('Archive extracted successfully.', 'success');
 
     // Clean up zip
@@ -116,6 +120,71 @@ export async function runAdb(argsString) {
     log(`Command failed: ${cmd}. Error: ${error.message}`, 'error');
     throw error;
   }
+}
+
+/**
+ * Safe ADB invocation: pass an explicit argv array, run via execFile (NO shell).
+ * User-influenced values are discrete arguments and can never break out into
+ * cmd.exe. Use this for anything that carries text, contact names, package
+ * names or PINs. `runAdb()` (string form) is retained only for fixed internal
+ * command strings.
+ *
+ * @param {string[]} args
+ * @param {{timeout?:number, maxBuffer?:number}} [opts]
+ * @returns {Promise<string>} trimmed stdout
+ */
+export async function runAdbArgs(args, opts = {}) {
+  if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) {
+    throw new TypeError('runAdbArgs expects an array of string arguments');
+  }
+  if (!isAdbReady) {
+    await ensureAdbInstalled();
+  }
+  const { timeout = 20000, maxBuffer = 8 * 1024 * 1024 } = opts;
+  log(`Executing (argv): adb ${args.join(' ')}`, 'debug');
+  try {
+    const { stdout, stderr } = await execFileAsync(adbPath, args, { timeout, maxBuffer });
+    if (stderr && stderr.trim() && !stderr.includes('daemon started successfully')) {
+      log(`ADB stderr warning: ${stderr.trim()}`, 'warning');
+    }
+    return String(stdout).trim();
+  } catch (error) {
+    log(`Command failed: adb ${args.join(' ')}. Error: ${error.message}`, 'error');
+    throw error;
+  }
+}
+
+/** Reject a device serial that is not a plain identifier before it hits `-s`. */
+export function assertDeviceId(id) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9.:_-]+$/.test(id)) {
+    throw new Error(`Invalid device id: ${JSON.stringify(id)}`);
+  }
+  return id;
+}
+
+/** Android package name guard, e.g. com.whatsapp */
+export function assertPackageName(name) {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/.test(name)) {
+    throw new Error(`Invalid package name: ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
+/** Android component guard, e.g. com.whatsapp/.Main */
+export function assertComponent(component) {
+  if (typeof component !== 'string' || !/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+\/[A-Za-z0-9_.]+$/.test(component)) {
+    throw new Error(`Invalid component: ${JSON.stringify(component)}`);
+  }
+  return component;
+}
+
+/**
+ * Wrap arbitrary text as a single POSIX-shell-quoted token for the *device*
+ * shell (`adb shell input text ...`). Combined with runAdbArgs (no host shell)
+ * this makes `input text` injection-proof on both sides.
+ */
+export function deviceShellQuote(text) {
+  return `'${String(text).replace(/'/g, `'\\''`)}'`;
 }
 
 /**
@@ -315,11 +384,14 @@ export async function unlockPhone(pin) {
 
   // 4. Input PIN if provided
   if (pin) {
+    if (!/^[0-9]{3,16}$/.test(String(pin))) {
+      throw new Error('Configured unlock PIN must be 3-16 digits.');
+    }
     log('Typing security PIN...', 'info');
-    await runAdb(`-s ${deviceId} shell input text ${pin}`);
+    await runAdbArgs(['-s', assertDeviceId(deviceId), 'shell', 'input', 'text', String(pin)]);
     await new Promise(resolve => setTimeout(resolve, 300));
     log('Submitting PIN...', 'info');
-    await runAdb(`-s ${deviceId} shell input keyevent 66`); // Enter key
+    await runAdbArgs(['-s', assertDeviceId(deviceId), 'shell', 'input', 'keyevent', '66']); // Enter key
   } else {
     log('Unlock swipe completed (No PIN configured).', 'success');
   }
@@ -669,9 +741,12 @@ const resolvedPackageCache = {};
  * Returns the component string (e.g. "com.whatsapp/.Main") or null.
  */
 async function resolveLauncherActivity(deviceId, packageName) {
+  assertDeviceId(deviceId);
+  assertPackageName(packageName);
   try {
-    const { stdout, stderr } = await execAsync(
-      `"${adbPath}" -s ${deviceId} shell cmd package resolve-activity --brief -c android.intent.category.LAUNCHER ${packageName}`
+    const { stdout, stderr } = await execFileAsync(adbPath,
+      ['-s', deviceId, 'shell', 'cmd', 'package', 'resolve-activity', '--brief',
+       '-c', 'android.intent.category.LAUNCHER', packageName]
     );
     const output = (stdout || '') + '\n' + (stderr || '');
     const lines = output.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -700,9 +775,11 @@ async function resolveLauncherActivity(deviceId, packageName) {
  * Returns true/false.
  */
 async function isPackageInstalled(deviceId, packageName) {
+  assertDeviceId(deviceId);
+  assertPackageName(packageName);
   try {
-    const { stdout } = await execAsync(
-      `"${adbPath}" -s ${deviceId} shell pm path ${packageName}`
+    const { stdout } = await execFileAsync(adbPath,
+      ['-s', deviceId, 'shell', 'pm', 'path', packageName]
     );
     return (stdout || '').includes('package:');
   } catch (e) {
@@ -715,14 +792,20 @@ async function isPackageInstalled(deviceId, packageName) {
  * Returns true if launched, false if package not found/can't launch.
  */
 async function tryLaunchPackage(deviceId, packageName) {
+  assertDeviceId(deviceId);
+  assertPackageName(packageName);
   // Step 1: Resolve the exact launcher activity
   const component = await resolveLauncherActivity(deviceId, packageName);
-  
-  if (component) {
+  const componentIsSafe = component && /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+\/[A-Za-z0-9_.]+$/.test(component);
+  if (component && !componentIsSafe) {
+    log(`Resolved component "${component}" is not a plain identifier; skipping am start.`, 'warning');
+  }
+
+  if (componentIsSafe) {
     // Step 2: Launch cleanly with am start — ZERO random events
     try {
-      const { stdout, stderr } = await execAsync(
-        `"${adbPath}" -s ${deviceId} shell am start -n "${component}"`
+      const { stdout, stderr } = await execFileAsync(adbPath,
+        ['-s', deviceId, 'shell', 'am', 'start', '-n', component]
       );
       const output = (stdout || '') + '\n' + (stderr || '');
       if (output.includes('Error:') || output.includes('does not exist') || output.includes('ClassNotFoundException')) {
@@ -756,8 +839,11 @@ async function tryLaunchPackage(deviceId, packageName) {
   // Step 4: Package exists but resolve-activity failed — last resort fallback
   // Use am start with the main intent and let Android figure it out
   try {
-    const { stdout, stderr } = await execAsync(
-      `"${adbPath}" -s ${deviceId} shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${packageName}/.MainActivity`
+    const { stdout, stderr } = await execFileAsync(adbPath,
+      ['-s', deviceId, 'shell', 'am', 'start',
+       '-a', 'android.intent.action.MAIN',
+       '-c', 'android.intent.category.LAUNCHER',
+       '-n', `${packageName}/.MainActivity`]
     );
     const output = (stdout || '') + '\n' + (stderr || '');
     if (output.includes('Error:') || output.includes('does not exist')) {
@@ -782,9 +868,10 @@ async function findPackageOnDevice(deviceId, appName) {
 
   log(`Scanning device for package matching "${appName}"...`, 'info');
   
+  assertDeviceId(deviceId);
   let listOutput;
   try {
-    const { stdout } = await execAsync(`"${adbPath}" -s ${deviceId} shell pm list packages`);
+    const { stdout } = await execFileAsync(adbPath, ['-s', deviceId, 'shell', 'pm', 'list', 'packages']);
     listOutput = stdout;
   } catch (e) {
     listOutput = e.stdout || '';
@@ -848,8 +935,12 @@ async function findPackageOnDevice(deviceId, appName) {
 
 /** Open a specific app by package name or common name */
 export async function openApp(appName) {
-  const id = await getFirstDevice();
-  
+  if (typeof appName !== 'string' || !/^[A-Za-z0-9 ._-]{1,64}$/.test(appName.trim())) {
+    throw new Error('App name may only contain letters, digits, spaces, dot, underscore and dash.');
+  }
+  appName = appName.trim();
+  const id = assertDeviceId(await getFirstDevice());
+
   // Wake device if screen is off
   const screenActive = await isScreenOn(id);
   if (!screenActive) {
@@ -950,10 +1041,14 @@ export async function openApp(appName) {
   // LAYER 4: Last resort - try using the app name directly as a package name
   if (nameLower.includes('.')) {
     log(`Trying "${nameLower}" as direct package name...`, 'info');
-    const launched = await tryLaunchPackage(id, nameLower);
-    if (launched) {
-      log(`App "${appName}" launched using direct package name.`, 'success');
-      return;
+    try {
+      const launched = await tryLaunchPackage(id, nameLower);
+      if (launched) {
+        log(`App "${appName}" launched using direct package name.`, 'success');
+        return;
+      }
+    } catch (e) {
+      log(`"${nameLower}" is not a valid package name: ${e.message}`, 'warning');
     }
   }
   
@@ -962,11 +1057,23 @@ export async function openApp(appName) {
 
 /** Open a URL in default browser */
 export async function openUrl(url) {
-  const id = await getFirstDevice();
-  let fullUrl = url;
-  if (!fullUrl.startsWith('http')) fullUrl = 'https://' + fullUrl;
+  const id = assertDeviceId(await getFirstDevice());
+  let raw = String(url ?? '').trim();
+  if (!/^https?:\/\//i.test(raw)) raw = 'https://' + raw;
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`Invalid URL: ${JSON.stringify(url)}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Only http/https URLs may be opened (got ${parsed.protocol}).`);
+  }
+
+  const fullUrl = parsed.toString();
   log(`Opening URL: ${fullUrl}...`, 'info');
-  await runAdb(`-s ${id} shell am start -a android.intent.action.VIEW -d "${fullUrl}"`);
+  await runAdbArgs(['-s', id, 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', fullUrl]);
   log(`URL opened in browser.`, 'success');
 }
 
@@ -1065,11 +1172,14 @@ export async function openNotifications() {
 
 /** Type text on the phone */
 export async function typeText(text) {
-  const id = await getFirstDevice();
-  // Escape special shell characters
-  const escaped = text.replace(/ /g, '%s').replace(/'/g, "\\'");
-  log(`Typing text: "${text}"...`, 'info');
-  await runAdb(`-s ${id} shell input text "${escaped}"`);
+  const id = assertDeviceId(await getFirstDevice());
+  const value = String(text ?? '');
+  if (value.length > 2000) {
+    throw new Error('Text is too long to type (max 2000 characters).');
+  }
+  log(`Typing text: "${value}"...`, 'info');
+  // No host shell (runAdbArgs) + device-shell single-quoting = injection-proof.
+  await runAdbArgs(['-s', id, 'shell', 'input', 'text', deviceShellQuote(value)]);
   log('Text typed on device.', 'success');
 }
 
@@ -1218,8 +1328,9 @@ export async function tapWhatsAppVideoCall() {
 
 /** Perform live in-app search in WhatsApp for a contact */
 export async function searchAndOpenWhatsAppContact(contactName) {
-  const id = await getFirstDevice();
-  log(`Performing live UI search in WhatsApp for: "${contactName}"...`, 'info');
+  const id = assertDeviceId(await getFirstDevice());
+  const name = String(contactName ?? '').slice(0, 80);
+  log(`Performing live UI search in WhatsApp for: "${name}"...`, 'info');
   
   try {
     // 1. Launch WhatsApp main screen
@@ -1244,9 +1355,8 @@ export async function searchAndOpenWhatsAppContact(contactName) {
     await runAdb(`-s ${id} shell input tap ${sx} ${sy}`);
     await new Promise(r => setTimeout(r, 1000));
     
-    // 3. Type the name
-    const escapedName = contactName.replace(/ /g, '%s').replace(/'/g, "\\'");
-    await runAdb(`-s ${id} shell input text "${escapedName}"`);
+    // 3. Type the name (no host shell + device-shell quoting = injection-proof)
+    await runAdbArgs(['-s', id, 'shell', 'input', 'text', deviceShellQuote(name)]);
     await new Promise(r => setTimeout(r, 2000)); // wait for search results to load
     
     // 4. Tap the first search result (usually just below the header)
