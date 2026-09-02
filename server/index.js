@@ -19,7 +19,8 @@ import {
 } from './adb.js';
 import { getDiagnostics, currentDeviceKey, invalidateDiagnostics } from './deviceState.js';
 import { JobQueue } from './jobQueue.js';
-import { configurePipeline, runCommandText } from './pipeline.js';
+import { configurePipeline, runCommandText, runAssistantText } from './pipeline.js';
+import { isAiEnabled, AI_MODEL } from './ai/client.js';
 import {
   assertJsonSchema,
   sendSafeError,
@@ -252,6 +253,28 @@ app.post('/api/wireless/disable', async (req, res) => {
   }
 });
 
+// AI assistant (Vani)
+const aiLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+
+app.get('/api/ai/status', (req, res) => {
+  res.json({ enabled: isAiEnabled(), model: isAiEnabled() ? AI_MODEL : null });
+});
+
+app.post('/api/ai/chat', aiLimiter.middleware, async (req, res) => {
+  try {
+    const message = typeof req.body?.message === 'string' ? req.body.message : '';
+    if (!message.trim()) return res.status(400).json({ error: 'message is required' });
+    if (message.length > 4000) return res.status(400).json({ error: 'message too long' });
+    // HTTP chat is stateless and has no confirm channel: destructive actions are
+    // declined here. Use the WebSocket `ai_chat` path for a multi-turn session.
+    const session = { aiHistory: [], requireConfirm: true, confirm: async () => false };
+    const result = await runAssistantText(message, session);
+    res.json({ reply: result.reply, ok: result.ok, actionsTaken: result.actionsTaken || [] });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
 // Job queue inspection
 app.get('/api/jobs', (req, res) => {
   res.json({ jobs: jobs.list({ limit: 100 }) });
@@ -440,9 +463,13 @@ const jobs = new JobQueue({
 });
 
 /** Enqueue a natural-language command and return its job snapshot. */
-async function enqueueCommand(text, session, meta = {}) {
+async function enqueueCommand(text, session, opts = {}) {
   const key = await currentDeviceKey();
-  return jobs.enqueue(key, () => runCommandText(text, session), { kind: 'command', text, ...meta });
+  return jobs.enqueue(
+    key,
+    () => runCommandText(text, session, opts),
+    { kind: 'command', text, source: opts.source || 'text' }
+  );
 }
 
 wss.on('connection', (ws) => {
@@ -494,8 +521,22 @@ wss.on('connection', (ws) => {
       const payload = JSON.parse(messageData);
 
       if (payload.type === 'execute_command') {
-        const snapshot = await enqueueCommand(String(payload.command || ''), ws.session);
+        const alternatives = Array.isArray(payload.alternatives)
+          ? payload.alternatives.filter((s) => typeof s === 'string').slice(0, 5)
+          : [];
+        const snapshot = await enqueueCommand(String(payload.command || ''), ws.session, {
+          alternatives,
+          source: payload.source === 'voice' ? 'voice' : 'text'
+        });
         ws.send(JSON.stringify({ type: 'command_queued', job: snapshot }));
+      }
+
+      else if (payload.type === 'ai_chat') {
+        const message = String(payload.message || '').slice(0, 4000);
+        if (message.trim()) {
+          const key = await currentDeviceKey();
+          jobs.enqueue(key, () => runAssistantText(message, ws.session), { kind: 'ai_chat' });
+        }
       }
 
       else if (payload.type === 'confirm_action') {

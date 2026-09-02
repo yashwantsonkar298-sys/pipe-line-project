@@ -367,15 +367,17 @@ async function fetchScreenshot() {
 // Command Execution Trigger
 // ==========================================================================
 
-function submitCommand() {
+function submitCommand(opts = {}) {
   const text = cmdTextInput.value.trim();
   if (!text) return;
 
   appendTerminalLine(`[INPUT] Sent Command: "${text}"`, 'system');
-  socket.send(JSON.stringify({
-    type: 'execute_command',
-    command: text
-  }));
+  const payload = { type: 'execute_command', command: text };
+  if (Array.isArray(opts.alternatives) && opts.alternatives.length > 1) {
+    payload.alternatives = opts.alternatives.slice(0, 5);
+  }
+  if (opts.source === 'voice') payload.source = 'voice';
+  socket.send(JSON.stringify(payload));
 
   cmdTextInput.value = '';
 }
@@ -562,6 +564,7 @@ btnSaveConfig.addEventListener('click', saveConfig);
 const tabMap = {
   'tab-btn-contacts': 'tab-content-contacts',
   'tab-btn-files': 'tab-content-files',
+  'tab-btn-ai': 'tab-content-ai',
   'tab-btn-settings': 'tab-content-settings'
 };
 

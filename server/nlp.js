@@ -219,11 +219,21 @@ export function parseCommand(text, contacts = [], context) {
   
   for (const contact of sortedContacts) {
     const contactNameLower = contact.name.toLowerCase();
-    
+
     // Check if the contact name appears in the command text
     if (cleanedText.includes(contactNameLower)) {
       resolvedContact = contact;
       break;
+    }
+  }
+
+  // Fuzzy fallback: speech-to-text often garbles names ("raul" -> "Rahul",
+  // "mumy" -> "Mummy"). Try a token-level near match before giving up.
+  if (!resolvedContact) {
+    const fuzzy = bestFuzzyContact(cleanedText, sortedContacts);
+    if (fuzzy) {
+      resolvedContact = fuzzy;
+      logDebug(`NLP fuzzy contact match: "${fuzzy.name}"`);
     }
   }
 
@@ -419,4 +429,182 @@ function extractWhatsAppMessage(text, contactName, rawNumber) {
 
 function logDebug(msg) {
   console.log(`[NLP DEBUG] ${msg}`);
+}
+
+// ==========================================================================
+// Hinglish speech-to-text normalization + fuzzy matching
+// ==========================================================================
+
+// Common Web-Speech mis-hearings for Hinglish commands. Each entry is
+// [regex, replacement] applied case-insensitively to the raw transcript.
+const HINGLISH_FIXES = [
+  // wake word junk - ONLY at the very start of the utterance
+  [/^\s*(funny|bunny|nanny|vaani|vani ji|when he|wami|honey|ronnie)\b/i, 'vani'],
+  // whatsapp
+  [/\b(whats app|whats up|what'?s app|what'?s up|watsapp|watts app|whatsaap|whatsp)\b/gi, 'whatsapp'],
+  // call
+  [/\b(kaul|kall|khaul|caul)\b/gi, 'call'],
+  [/\b(phone karo|phone kar do|phone lagao)\b/gi, 'call'],
+  // flashlight / torch
+  [/\b(flash light|flashlite|flash lite|flesh light|flashlyt)\b/gi, 'flashlight'],
+  [/\b(tortch|taurch|torche)\b/gi, 'torch'],
+  // volume
+  [/\bvol (up|down)\b/gi, 'volume $1'],
+  [/\b(volume badhao|volume badha do|awaaz badhao|aawaz badhao)\b/gi, 'volume up'],
+  [/\b(volume kam karo|volume ghatao|awaaz kam karo)\b/gi, 'volume down'],
+  // brightness
+  [/\b(brightness badhao|brightness badha do|roshni badhao)\b/gi, 'brightness up'],
+  [/\b(brightness kam karo|brightness ghatao|roshni kam karo)\b/gi, 'brightness down'],
+  // photo / camera
+  [/\b(photo lo|photo le lo|photo kheencho|photo khinch|selfie lo|take selfie)\b/gi, 'take photo'],
+  // unlock / lock
+  [/\b(un lock|unlok|unluck)\b/gi, 'unlock'],
+  // shutdown
+  [/\b(shut down|shatdown|shutdaun|shut daun)\b/gi, 'shutdown'],
+  [/\b(pc band karo|computer band karo|laptop band karo)\b/gi, 'shutdown pc'],
+  // media
+  [/\b(gaana chalao|song chalao|music chalao|play gaana)\b/gi, 'play music'],
+  [/\b(agla gaana|next gaana|next gana)\b/gi, 'next song'],
+  [/\b(pichla gaana|previous gaana|last gaana)\b/gi, 'previous song'],
+  // navigation
+  [/\b(home jao|home chalo|ghar jao)\b/gi, 'go home'],
+  [/\b(peeche jao|wapas jao|back jao)\b/gi, 'go back'],
+];
+
+// Spoken number words -> digits. ONLY applied right after brightness/volume/level
+// so we never rewrite common Hindi fillers like "kar do" / "bhej do".
+const NUMBER_WORDS = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, twenty: 20, thirty: 30, forty: 40, fifty: 50,
+  sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100,
+  'full': 255, 'maximum': 255, 'max': 255, 'minimum': 10, 'min': 10
+};
+
+/**
+ * Normalize a raw speech transcript for Hinglish command recognition.
+ * Safe to call on typed input too (mostly a no-op there).
+ */
+export function normalizeHinglish(text) {
+  if (typeof text !== 'string' || !text) return '';
+  let out = ' ' + text.toLowerCase().replace(/\s+/g, ' ').trim() + ' ';
+
+  for (const [re, rep] of HINGLISH_FIXES) out = out.replace(re, rep);
+
+  // "brightness fifty" -> "brightness 50", "volume to full" -> "volume 255"
+  out = out.replace(/\b(brightness|volume|level)\s+(?:to\s+|ko\s+)?([a-z]+)\b/gi, (m, key, word) => {
+    const n = NUMBER_WORDS[word.toLowerCase()];
+    return n === undefined ? m : `${key} ${n}`;
+  });
+
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/** Levenshtein edit distance (iterative, O(n*m) space-optimized). */
+export function levenshtein(a, b) {
+  a = String(a); b = String(b);
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** Sørensen–Dice coefficient over character bigrams (0..1). */
+export function dice(a, b) {
+  a = String(a).toLowerCase().replace(/\s+/g, '');
+  b = String(b).toLowerCase().replace(/\s+/g, '');
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const bigrams = new Map();
+  for (let i = 0; i < a.length - 1; i++) {
+    const bg = a.substr(i, 2);
+    bigrams.set(bg, (bigrams.get(bg) || 0) + 1);
+  }
+  let overlap = 0;
+  for (let i = 0; i < b.length - 1; i++) {
+    const bg = b.substr(i, 2);
+    const count = bigrams.get(bg) || 0;
+    if (count > 0) { bigrams.set(bg, count - 1); overlap++; }
+  }
+  return (2 * overlap) / (a.length - 1 + b.length - 1);
+}
+
+/**
+ * Best near match between a transcript and a contact list. Compares each
+ * whitespace token (and adjacent token pairs) of the transcript against every
+ * contact name. Returns the contact or null.
+ */
+export function bestFuzzyContact(text, contacts) {
+  const tokens = String(text).toLowerCase().split(/\s+/).filter((t) => t.length >= 3);
+  const chunks = new Set(tokens);
+  for (let i = 0; i < tokens.length - 1; i++) chunks.add(tokens[i] + ' ' + tokens[i + 1]);
+
+  let best = null;
+  let bestScore = 0;
+  for (const contact of contacts) {
+    const name = String(contact.name || '').toLowerCase();
+    if (name.length < 3) continue;
+    for (const chunk of chunks) {
+      const d = levenshtein(chunk, name);
+      const maxLen = Math.max(chunk.length, name.length);
+      const near = (name.length >= 4 && d <= 2) || (name.length < 4 && d <= 1);
+      const sim = dice(chunk, name);
+      const score = Math.max(sim, near ? 1 - d / (maxLen || 1) : 0);
+      if ((near || sim >= 0.8) && score > bestScore) {
+        bestScore = score;
+        best = contact;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Run the parser over an ordered list of speech candidates (best first),
+ * normalizing each. Returns the first candidate that yields a real intent;
+ * if none do, returns the first parse plus every string tried so a caller
+ * can hand the list to the AI.
+ *
+ * @param {string[]} candidates
+ * @param {Array} contacts
+ * @param {object} [context]  per-session nlpContext
+ * @returns {{ parsed: object, chosenText: string, tried: string[] }}
+ */
+export function parseCandidates(candidates, contacts = [], context) {
+  const tried = [];
+  const list = (Array.isArray(candidates) ? candidates : [candidates])
+    .map((c) => (typeof c === 'string' ? c : ''))
+    .filter(Boolean);
+
+  const seen = new Set();
+  let firstParse = null;
+  let firstText = list[0] || '';
+
+  for (const raw of list) {
+    const normalized = normalizeHinglish(raw);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    tried.push(normalized);
+
+    const parsed = parseCommand(normalized, contacts, context);
+    if (!firstParse) { firstParse = parsed; firstText = normalized; }
+    if (parsed.intent && parsed.intent !== 'UNKNOWN') {
+      return { parsed, chosenText: normalized, tried };
+    }
+  }
+
+  return {
+    parsed: firstParse || parseCommand(firstText, contacts, context),
+    chosenText: firstText,
+    tried
+  };
 }
