@@ -2,8 +2,9 @@
 // NexusFlow Core Frontend Controller
 // ==========================================================================
 
-const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const socket = new WebSocket(`${wsProtocol}//${window.location.host}`);
+// Reconnecting client (js/wsClient.js). Same surface as a raw WebSocket:
+// .send(), .addEventListener('message'|'open'|'close'|'reconnecting').
+const socket = window.NexusWS;
 
 let contactsData = [];
 let configData = {};
@@ -54,8 +55,23 @@ const cfgWyInput = document.getElementById('cfg-wy');
 const btnSaveConfig = document.getElementById('btn-save-config');
 
 // Initialize WebSockets
+let wasDisconnected = false;
 socket.addEventListener('open', () => {
-  appendTerminalLine('[SYSTEM] Server WebSocket channel established.', 'system');
+  if (wasDisconnected) {
+    appendTerminalLine('[SYSTEM] Reconnected to server.', 'adb-success');
+    showToast('RECONNECTED', 'Server connection restored.', 'success');
+    wasDisconnected = false;
+  } else {
+    appendTerminalLine('[SYSTEM] Server WebSocket channel established.', 'system');
+  }
+});
+
+socket.addEventListener('reconnecting', ({ delay, everConnected }) => {
+  if (!everConnected) return; // initial connect - stay quiet
+  wasDisconnected = true;
+  if (adbStatusDot) adbStatusDot.className = 'status-dot disconnected';
+  if (adbStatusText) adbStatusText.textContent = 'RECONNECTING…';
+  appendTerminalLine(`[SYSTEM] Connection lost - retrying in ${Math.round(delay / 1000)}s…`, 'adb-warning');
 });
 
 socket.addEventListener('message', (event) => {
@@ -71,9 +87,10 @@ socket.addEventListener('message', (event) => {
       break;
 
     case 'confirm_request': {
-      const approved = window.confirm(`Confirm action:\n\n${data.summary}`);
-      socket.send(JSON.stringify({ type: 'confirm_action', id: data.id, approved }));
-      appendTerminalLine(`[CONFIRM] ${data.summary} -> ${approved ? 'approved' : 'declined'}`, approved ? 'adb-success' : 'adb-warning');
+      confirmDialog(data.summary, { okText: 'Run it', cancelText: 'Cancel', danger: true }).then((approved) => {
+        socket.send(JSON.stringify({ type: 'confirm_action', id: data.id, approved }));
+        appendTerminalLine(`[CONFIRM] ${data.summary} -> ${approved ? 'approved' : 'declined'}`, approved ? 'adb-success' : 'adb-warning');
+      });
       break;
     }
 
@@ -145,10 +162,10 @@ socket.addEventListener('message', (event) => {
 });
 
 socket.addEventListener('close', () => {
-  appendTerminalLine('[SYSTEM] Server connection closed. Reconnecting...', 'adb-error');
-  adbStatusDot.className = 'status-dot disconnected';
-  adbStatusText.textContent = 'SERVER DISCONNECTED';
-  showToast('CONNECTION LOST', 'Server WebSocket connection dropped.', 'error');
+  // The client auto-reconnects; the 'reconnecting' handler owns the UI so we
+  // don't spam a toast on every drop.
+  if (adbStatusDot) adbStatusDot.className = 'status-dot disconnected';
+  if (adbStatusText) adbStatusText.textContent = 'SERVER DISCONNECTED';
 });
 
 // ==========================================================================
@@ -179,7 +196,7 @@ function showToast(title, message, type = 'success') {
   `;
   
   toastContainer.appendChild(toast);
-  
+
   // Auto remove after 4.5 seconds
   setTimeout(() => {
     toast.classList.add('toast-exit');
@@ -187,6 +204,47 @@ function showToast(title, message, type = 'success') {
       toast.remove();
     });
   }, 4500);
+}
+
+/**
+ * In-app confirmation modal. Returns a Promise<boolean>. Replaces window.confirm
+ * so the cyber theme is preserved and blocking prompts are gone.
+ */
+function confirmDialog(message, { okText = 'Confirm', cancelText = 'Cancel', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-box">
+        <div class="confirm-message"></div>
+        <div class="confirm-actions">
+          <button class="hud-btn btn-secondary btn-sm" data-act="cancel"></button>
+          <button class="hud-btn ${danger ? 'btn-danger' : 'btn-primary'} btn-sm" data-act="ok"></button>
+        </div>
+      </div>`;
+    overlay.querySelector('.confirm-message').textContent = message;
+    overlay.querySelector('[data-act="cancel"]').textContent = cancelText;
+    overlay.querySelector('[data-act="ok"]').textContent = okText;
+
+    function done(val) {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(val);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') done(false);
+      if (e.key === 'Enter') done(true);
+    }
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) done(false);
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'ok') done(true);
+      if (act === 'cancel') done(false);
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-act="ok"]').focus();
+  });
 }
 
 // ==========================================================================
@@ -412,10 +470,13 @@ btnAbortShutdown.addEventListener('click', () => {
 // Contacts CRUD Editor Panel
 // ==========================================================================
 
+let editingContactId = null;
+
 async function fetchContacts() {
   try {
     const res = await fetch('/api/contacts');
-    contactsData = await res.json();
+    const data = await res.json();
+    contactsData = Array.isArray(data) ? data : [];
     renderContacts();
   } catch (err) {
     appendTerminalLine('[SYSTEM] Failed to load contacts.', 'adb-error');
@@ -426,15 +487,21 @@ function renderContacts() {
   contactsListContainer.innerHTML = '';
   contactsData.forEach(contact => {
     const card = document.createElement('div');
-    card.className = 'contact-card';
-    
+    card.className = 'contact-card' + (contact.id === editingContactId ? ' editing' : '');
+
     card.innerHTML = `
       <div class="contact-info">
-        <span class="contact-name">${contact.name}</span>
-        <span class="contact-number">+${contact.number}</span>
+        <span class="contact-name"></span>
+        <span class="contact-number"></span>
       </div>
       <div class="contact-actions">
-        <button class="btn-icon btn-delete-contact" data-id="${contact.id}">
+        <button class="btn-icon btn-edit-contact" title="Edit">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+          </svg>
+        </button>
+        <button class="btn-icon btn-delete-contact" title="Delete">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6" />
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -444,76 +511,90 @@ function renderContacts() {
         </button>
       </div>
     `;
-    
+    card.querySelector('.contact-name').textContent = contact.name;
+    card.querySelector('.contact-number').textContent = '+' + contact.number;
+    card.querySelector('.btn-edit-contact').addEventListener('click', () => startEditContact(contact));
+    card.querySelector('.btn-delete-contact').addEventListener('click', () => deleteContact(contact.id));
     contactsListContainer.appendChild(card);
   });
 
-  // Attach delete listeners
-  document.querySelectorAll('.btn-delete-contact').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const id = e.currentTarget.getAttribute('data-id');
-      deleteContact(id);
-    });
-  });
-  
-  // Re-align pipeline paths since height of column might change
+  if (btnSaveContact) btnSaveContact.textContent = editingContactId ? 'UPDATE CONTACT' : 'SAVE CONTACT';
   drawConnectorPaths();
+}
+
+function startEditContact(contact) {
+  editingContactId = contact.id;
+  contactNameInput.value = contact.name;
+  contactPhoneInput.value = contact.number;
+  contactNameInput.focus();
+  renderContacts();
+}
+
+function cancelEditContact() {
+  editingContactId = null;
+  contactNameInput.value = '';
+  contactPhoneInput.value = '';
+  renderContacts();
+}
+
+async function persistContacts(successMsg) {
+  try {
+    const res = await fetch('/api/contacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(contactsData)
+    });
+    if (res.ok) {
+      appendTerminalLine(`[SYSTEM] ${successMsg}`, 'adb-success');
+      return true;
+    }
+    const err = await res.json().catch(() => ({}));
+    showToast('CONTACT SAVE FAILED', err.error?.message || `HTTP ${res.status}`, 'error');
+  } catch (err) {
+    showToast('CONTACT SAVE FAILED', err.message, 'error');
+  }
+  return false;
 }
 
 async function saveContact() {
   const name = contactNameInput.value.trim();
-  const phone = contactPhoneInput.value.trim().replace(/[^0-9]/g, '');
+  const phone = contactPhoneInput.value.trim().replace(/[^0-9+]/g, '');
 
-  if (!name || !phone) {
-    alert('Please enter valid contact details');
+  if (!name || !/^\+?[0-9]{6,15}$/.test(phone)) {
+    showToast('INVALID CONTACT', 'Enter a name and a 6-15 digit phone number.', 'warning');
     return;
   }
 
-  // Create new or edit existing
-  const newContact = {
-    id: Date.now().toString(),
-    name,
-    number: phone
-  };
-
-  contactsData.push(newContact);
-
-  try {
-    const res = await fetch('/api/contacts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(contactsData)
-    });
-    
-    if (res.ok) {
-      contactNameInput.value = '';
-      contactPhoneInput.value = '';
-      renderContacts();
-      appendTerminalLine(`[SYSTEM] Saved contact: ${name}`, 'system');
-    }
-  } catch (err) {
-    alert('Failed to save contact');
+  const snapshot = JSON.parse(JSON.stringify(contactsData));
+  if (editingContactId) {
+    const c = contactsData.find(x => x.id === editingContactId);
+    if (c) { c.name = name; c.number = phone; }
+  } else {
+    contactsData.push({ id: Date.now().toString(), name, number: phone });
   }
+
+  const ok = await persistContacts(editingContactId ? `Updated contact: ${name}` : `Saved contact: ${name}`);
+  if (!ok) { contactsData = snapshot; renderContacts(); return; }
+
+  editingContactId = null;
+  contactNameInput.value = '';
+  contactPhoneInput.value = '';
+  renderContacts();
 }
 
 async function deleteContact(id) {
+  const target = contactsData.find(c => c.id === id);
+  if (!(await confirmDialog(`Delete "${target?.name || 'this contact'}"?`, { okText: 'Delete', danger: true }))) return;
+  const snapshot = JSON.parse(JSON.stringify(contactsData));
   contactsData = contactsData.filter(c => c.id !== id);
-  try {
-    const res = await fetch('/api/contacts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(contactsData)
-    });
-    if (res.ok) {
-      renderContacts();
-      appendTerminalLine('[SYSTEM] Contact deleted.', 'system');
-    }
-  } catch (err) {
-    alert('Failed to delete contact');
-  }
+  if (editingContactId === id) cancelEditContact();
+  const ok = await persistContacts('Contact deleted.');
+  if (!ok) { contactsData = snapshot; }
+  renderContacts();
 }
 
 btnSaveContact.addEventListener('click', saveContact);
+contactPhoneInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveContact(); });
 
 // ==========================================================================
 // Settings Panel Form
@@ -561,13 +642,13 @@ async function saveConfig() {
       appendTerminalLine('[SYSTEM] System configuration applied.', 'adb-success');
       cfgPinInput.value = '';
       await fetchConfig();
-      alert('Properties saved successfully!');
+      showToast('SETTINGS SAVED', 'System configuration applied.', 'success');
     } else {
       const err = await res.json().catch(() => ({}));
-      alert('Save failed: ' + (err.error?.message || res.status));
+      showToast('SAVE FAILED', err.error?.message || `HTTP ${res.status}`, 'error');
     }
   } catch (err) {
-    alert('Failed to apply properties.');
+    showToast('SAVE FAILED', err.message, 'error');
   }
 }
 
@@ -682,8 +763,8 @@ if (btnSyncContacts) {
 const btnClearContacts = document.getElementById('btn-clear-contacts');
 if (btnClearContacts) {
   btnClearContacts.addEventListener('click', async () => {
-    if (!confirm('Are you sure you want to delete ALL contacts?')) return;
-    
+    if (!(await confirmDialog('Delete ALL contacts? This cannot be undone.', { okText: 'Delete all', danger: true }))) return;
+
     btnClearContacts.disabled = true;
     try {
       const res = await fetch('/api/contacts', { method: 'DELETE' });
@@ -696,7 +777,7 @@ if (btnClearContacts) {
         }
       }
     } catch (err) {
-      alert('Failed to clear contacts');
+      showToast('CLEAR FAILED', err.message, 'error');
     } finally {
       btnClearContacts.disabled = false;
     }
