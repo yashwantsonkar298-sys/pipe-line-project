@@ -85,3 +85,16 @@ test('local-only mode: loopback is allowed, config validation still applies', as
   const cfg = await (await fetch(`${base}/api/config`)).json();
   assert.equal(cfg.unlockPin, '', 'GET /api/config never returns the PIN');
 });
+
+test('GET /api/health needs no auth and reports status', async (t) => {
+  const PORT = 4713;
+  const child = await startServer({ PORT: String(PORT), NEXUSFLOW_AUTH_TOKEN: 'tok' });
+  t.after(() => stop(child));
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/health`);
+  assert.equal(res.status, 200, 'health is reachable without a token');
+  const body = await res.json();
+  assert.equal(body.status, 'ok');
+  assert.equal(body.authRequired, true);
+  assert.equal(typeof body.uptimeSeconds, 'number');
+  assert.equal(typeof body.aiEnabled, 'boolean');
+});

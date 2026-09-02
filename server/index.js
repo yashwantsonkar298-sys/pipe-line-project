@@ -20,7 +20,7 @@ import {
   unlockPhone
 } from './adb.js';
 import { getDiagnostics, currentDeviceKey, invalidateDiagnostics } from './deviceState.js';
-import { JobQueue } from './jobQueue.js';
+import { JobQueue, JOB_STATES } from './jobQueue.js';
 import { configurePipeline, runCommandText, runAssistantText } from './pipeline.js';
 import { isAiEnabled, AI_MODEL } from './ai/client.js';
 import {
@@ -130,6 +130,24 @@ app.post('/api/auth/login', express.json({ limit: '4kb' }), (req, res) => {
 });
 app.get('/api/auth/status', (req, res) => {
   res.json({ authRequired: Boolean(AUTH_TOKEN) });
+});
+
+// Liveness probe - no auth, no secrets. Useful for `curl`, monitors, CI.
+const BOOT_TIME = Date.now();
+app.get('/api/health', async (req, res) => {
+  let device = null;
+  try {
+    const d = await getDiagnostics();
+    device = d.connected ? { model: d.model, android: d.androidVersion, battery: d.batteryLevel } : null;
+  } catch { /* ignore */ }
+  res.json({
+    status: 'ok',
+    uptimeSeconds: Math.round((Date.now() - BOOT_TIME) / 1000),
+    authRequired: Boolean(AUTH_TOKEN),
+    aiEnabled: isAiEnabled(),
+    deviceConnected: Boolean(device),
+    device
+  });
 });
 
 // Everything else under /api requires auth (bearer) or a loopback client.
@@ -813,7 +831,7 @@ async function maybeAutoUnlock(diagnostics) {
 // client polling every 5s (getDiagnostics() is cached + single-flight).
 // ==========================================================================
 let lastAlertTime = 0;
-setInterval(async () => {
+const diagnosticsPoll = setInterval(async () => {
   try {
     invalidateDiagnostics(); // force a fresh probe on this tick
     const diagnostics = await getDiagnostics();
@@ -854,3 +872,32 @@ server.listen(PORT, () => {
     }
   });
 });
+
+// ==========================================================================
+// Graceful shutdown: stop the poller, stop accepting connections, give a
+// running job up to 4s to finish, then close sockets and exit.
+// ==========================================================================
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[SERVER] ${signal} received - shutting down gracefully...`);
+  clearInterval(diagnosticsPoll);
+  cancelPcShutdown();
+
+  const deadline = Date.now() + 4000;
+  const finish = () => {
+    for (const ws of wss.clients) { try { ws.close(1001, 'server shutting down'); } catch { /* ignore */ } }
+    server.close(() => { console.log('[SERVER] Closed. Bye.'); process.exit(0); });
+    setTimeout(() => process.exit(0), 1500).unref();
+  };
+  const wait = () => {
+    const busy = jobs.list({ states: [JOB_STATES.RUNNING] }).length;
+    if (busy === 0 || Date.now() > deadline) return finish();
+    console.log(`[SERVER] waiting for ${busy} running job(s)...`);
+    setTimeout(wait, 300);
+  };
+  wait();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
