@@ -20,6 +20,16 @@ import {
 import { getDiagnostics, currentDeviceKey, invalidateDiagnostics } from './deviceState.js';
 import { JobQueue } from './jobQueue.js';
 import { configurePipeline, runCommandText } from './pipeline.js';
+import { assertJsonSchema, sendSafeError } from './security.js';
+import {
+  CONFIG_SCHEMA,
+  CONTACTS_SCHEMA,
+  readPublicConfig,
+  writeConfig,
+  mergeConfig,
+  readContacts,
+  writeContacts
+} from './config/index.js';
 import {
   listPhoneFiles,
   pullFileFromPhone,
@@ -64,8 +74,7 @@ let shutdownTimeLeft = 10;
 // HTTP API Routes
 app.get('/api/contacts', (req, res) => {
   try {
-    const data = fs.readFileSync(CONTACTS_FILE, 'utf8');
-    res.json(JSON.parse(data));
+    res.json(readContacts());
   } catch (error) {
     res.status(500).json({ error: 'Failed to read contacts' });
   }
@@ -73,16 +82,17 @@ app.get('/api/contacts', (req, res) => {
 
 app.post('/api/contacts', (req, res) => {
   try {
-    fs.writeFileSync(CONTACTS_FILE, JSON.stringify(req.body, null, 2));
+    assertJsonSchema(req.body ?? [], CONTACTS_SCHEMA);
+    writeContacts(req.body);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to save contacts' });
+    sendSafeError(res, error);
   }
 });
 
 app.delete('/api/contacts', (req, res) => {
   try {
-    fs.writeFileSync(CONTACTS_FILE, JSON.stringify([], null, 2));
+    writeContacts([]);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to clear contacts' });
@@ -91,8 +101,7 @@ app.delete('/api/contacts', (req, res) => {
 
 app.get('/api/config', (req, res) => {
   try {
-    const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-    res.json(JSON.parse(data));
+    res.json(readPublicConfig());
   } catch (error) {
     res.status(500).json({ error: 'Failed to read config' });
   }
@@ -100,10 +109,11 @@ app.get('/api/config', (req, res) => {
 
 app.post('/api/config', (req, res) => {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(req.body, null, 2));
+    assertJsonSchema(req.body ?? {}, CONFIG_SCHEMA);
+    writeConfig(mergeConfig(req.body ?? {}));
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to save config' });
+    sendSafeError(res, error);
   }
 });
 
