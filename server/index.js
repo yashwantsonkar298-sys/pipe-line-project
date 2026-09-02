@@ -11,13 +11,14 @@ import multer from 'multer';
 // Import our custom modules
 import {
   ensureAdbInstalled,
-  getDeviceDiagnostics,
   captureScreen,
   setLogCallback,
   syncPhoneContacts,
   enableWirelessAdb,
   disableWirelessAdb
 } from './adb.js';
+import { getDiagnostics, currentDeviceKey, invalidateDiagnostics } from './deviceState.js';
+import { JobQueue } from './jobQueue.js';
 import { configurePipeline, runCommandText } from './pipeline.js';
 import {
   listPhoneFiles,
@@ -108,7 +109,7 @@ app.post('/api/config', (req, res) => {
 
 app.get('/api/diagnostics', async (req, res) => {
   try {
-    const diagnostics = await getDeviceDiagnostics();
+    const diagnostics = await getDiagnostics();
     res.json(diagnostics);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -176,6 +177,16 @@ app.post('/api/wireless/disable', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Job queue inspection
+app.get('/api/jobs', (req, res) => {
+  res.json({ jobs: jobs.list({ limit: 100 }) });
+});
+
+app.post('/api/jobs/:id/cancel', (req, res) => {
+  const cancelled = jobs.cancel(req.params.id);
+  res.json({ success: cancelled });
 });
 
 // ==========================================================================
@@ -321,6 +332,19 @@ setLogCallback((logObj) => {
   broadcast({ type: 'adb_log', log: logObj });
 });
 
+// Per-device FIFO job queue: commands for one device run strictly one at a time
+// (different devices run concurrently), so overlapping WS/AI/macro commands no
+// longer race on the single ADB connection.
+const jobs = new JobQueue({
+  onEvent: (event) => broadcast({ type: 'job_event', event })
+});
+
+/** Enqueue a natural-language command and return its job snapshot. */
+async function enqueueCommand(text, session, meta = {}) {
+  const key = await currentDeviceKey();
+  return jobs.enqueue(key, () => runCommandText(text, session), { kind: 'command', text, ...meta });
+}
+
 wss.on('connection', (ws) => {
   console.log('[WS] Client connected');
 
@@ -334,7 +358,7 @@ wss.on('connection', (ws) => {
   };
 
   // Send immediate ADB status update
-  getDeviceDiagnostics().then(diagnostics => {
+  getDiagnostics().then(diagnostics => {
     ws.send(JSON.stringify({ type: 'diagnostics', data: diagnostics }));
   });
 
@@ -343,15 +367,20 @@ wss.on('connection', (ws) => {
       const payload = JSON.parse(messageData);
 
       if (payload.type === 'execute_command') {
-        await runCommandText(String(payload.command || ''), ws.session);
+        const snapshot = await enqueueCommand(String(payload.command || ''), ws.session);
+        ws.send(JSON.stringify({ type: 'command_queued', job: snapshot }));
       }
 
       else if (payload.type === 'cancel_shutdown') {
         cancelPcShutdown();
       }
 
+      else if (payload.type === 'cancel_job') {
+        jobs.cancel(String(payload.jobId || ''));
+      }
+
       else if (payload.type === 'request_diagnostics') {
-        const diagnostics = await getDeviceDiagnostics();
+        const diagnostics = await getDiagnostics();
         ws.send(JSON.stringify({ type: 'diagnostics', data: diagnostics }));
       }
     } catch (err) {
@@ -413,20 +442,24 @@ function cancelPcShutdown() {
 configurePipeline({ broadcast, startPcShutdown });
 
 // ==========================================================================
-// Autonomous System Health Poller
+// Single server-side diagnostics poll: broadcasts device status to every client
+// AND raises the critical-battery alert. Replaces the old 30s poller + each
+// client polling every 5s (getDiagnostics() is cached + single-flight).
 // ==========================================================================
 let lastAlertTime = 0;
 setInterval(async () => {
   try {
-    const diagnostics = await getDeviceDiagnostics();
+    invalidateDiagnostics(); // force a fresh probe on this tick
+    const diagnostics = await getDiagnostics();
+    broadcast({ type: 'diagnostics', data: diagnostics });
+
     if (diagnostics && diagnostics.connected) {
       const isCritical = diagnostics.batteryLevel <= 15 || (diagnostics.batteryTemp && diagnostics.batteryTemp >= 40);
       const now = Date.now();
-      // Only alert once every 5 minutes maximum
       if (isCritical && (now - lastAlertTime > 5 * 60 * 1000)) {
         lastAlertTime = now;
-        broadcast({ 
-          type: 'system_alert', 
+        broadcast({
+          type: 'system_alert',
           message: 'Warning: Device battery is low or temperature is critical.',
           ttsMessage: 'Warning! Device temperature or battery level is critical. Please check your device.'
         });
@@ -435,7 +468,7 @@ setInterval(async () => {
   } catch (e) {
     // Ignore errors for background poller
   }
-}, 30000); // Check every 30 seconds
+}, 5000);
 
 // Boot up
 server.listen(PORT, () => {
