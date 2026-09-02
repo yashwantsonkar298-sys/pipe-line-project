@@ -298,6 +298,20 @@ export const ACTIONS = {
     tts: () => ''
   },
 
+  RUN_MACRO: {
+    destructive: false,
+    params: { name: { type: 'string', minLength: 1, maxLength: 80 } },
+    required: ['name'],
+    aiName: 'run_macro',
+    description: 'Run a saved automation macro by its name (e.g. "Night Mode", "Morning Routine").',
+    summary: (p) => `Run macro "${p.name}"`,
+    run: async (p, ctx) => {
+      if (typeof ctx.runMacro !== 'function') throw new Error('Macros are not available here');
+      return ctx.runMacro(p.name);
+    },
+    tts: (p) => `Running the ${p.name} macro.`
+  },
+
   // ---- Sequences (not exposed to the AI) -------------------------------
   GOD_MODE: {
     destructive: true,

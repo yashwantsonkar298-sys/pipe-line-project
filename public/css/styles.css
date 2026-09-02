@@ -1666,3 +1666,40 @@ body {
   border-color: var(--accent-yellow);
   box-shadow: 0 0 12px rgba(255, 210, 0, 0.35);
 }
+
+/* ====================================================================== */
+/* MACROS PANEL                                                           */
+/* ====================================================================== */
+#tab-content-macros { display: flex; flex-direction: column; }
+.macro-list { display: flex; flex-direction: column; gap: 8px; }
+.macro-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.22);
+}
+.macro-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.macro-card-name { font-family: var(--font-hud, var(--font-mono)); font-size: 12px; font-weight: 700; color: var(--text-primary); }
+.macro-card-actions { display: flex; align-items: center; gap: 5px; }
+.btn-xs { padding: 3px 9px !important; font-size: 10px !important; }
+.macro-card-desc { font-family: var(--font-sans); font-size: 11px; color: var(--text-secondary); margin-top: 3px; }
+.macro-card-steps { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); margin-top: 4px; word-break: break-word; }
+.macro-progress { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.mp-step {
+  font-family: var(--font-mono); font-size: 9px; padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--panel-border); color: var(--text-dim);
+}
+.mp-executing { border-color: var(--accent-yellow); color: var(--accent-yellow); animation: mpPulse 0.8s infinite alternate; }
+.mp-success { border-color: var(--accent-green); color: var(--accent-green); }
+.mp-failed { border-color: var(--accent-red); color: #ff9db0; }
+@keyframes mpPulse { from { opacity: 0.5; } to { opacity: 1; } }
+
+.macro-editor {
+  margin-top: 12px; padding: 12px;
+  border: 1px solid var(--accent-purple); border-radius: 8px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.macro-steps { display: flex; flex-direction: column; gap: 6px; }
+.macro-step-row { display: grid; grid-template-columns: 1fr 88px 28px; gap: 6px; align-items: center; }
+.macro-step-row .step-del { color: var(--accent-red); }
+.macro-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }

@@ -27,10 +27,12 @@ let _broadcast = () => {};
 let _startPcShutdown = () => {
   throw new Error('PC shutdown trigger not configured');
 };
+let _runMacroByName = null;
 
-export function configurePipeline({ broadcast, startPcShutdown } = {}) {
+export function configurePipeline({ broadcast, startPcShutdown, runMacroByName } = {}) {
   if (typeof broadcast === 'function') _broadcast = broadcast;
   if (typeof startPcShutdown === 'function') _startPcShutdown = startPcShutdown;
+  if (typeof runMacroByName === 'function') _runMacroByName = runMacroByName;
 }
 
 function readJsonFile(file, fallback) {
@@ -50,6 +52,7 @@ function buildActionCtx(config, session) {
     broadcast: _broadcast,
     log: (message, type = 'info') => _broadcast({ type: 'adb_log', log: { type, message } }),
     startPcShutdown: _startPcShutdown,
+    runMacro: _runMacroByName ? (name) => _runMacroByName(name) : undefined,
     requireConfirm: Boolean(session.requireConfirm),
     confirm: session.confirm
   };

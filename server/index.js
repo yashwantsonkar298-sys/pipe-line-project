@@ -53,6 +53,15 @@ import {
   createPhoneDirectory,
   getStorageInfo
 } from './fileTransfer.js';
+import {
+  getMacros,
+  getMacroById,
+  saveMacro,
+  updateMacro,
+  deleteMacro,
+  executeMacro,
+  validateMacro
+} from './macros.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -502,6 +511,57 @@ async function enqueueCommand(text, session, opts = {}) {
   );
 }
 
+// A macro's steps are commands the user deliberately assembled, so they run
+// without per-step confirmation (SHUTDOWN still has its own 10s abort overlay).
+const MACRO_SESSION = { nlpContext: {}, requireConfirm: false };
+
+/** Enqueue a full macro run; each step flows through the normal NLP->registry path. */
+async function enqueueMacro(id) {
+  const key = await currentDeviceKey();
+  return jobs.enqueue(key, () => executeMacro(
+    id,
+    (command) => runCommandText(command, MACRO_SESSION),
+    (step) => broadcast({ type: 'macro_step', step })
+  ), { kind: 'macro', id });
+}
+
+// ---- Macro routes -----------------------------------------------------------
+app.get('/api/macros', (req, res) => {
+  res.json({ macros: getMacros() });
+});
+
+app.post('/api/macros', (req, res) => {
+  try {
+    validateMacro(req.body);
+    res.json(saveMacro(req.body));
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.put('/api/macros/:id', (req, res) => {
+  try {
+    const { id: _ignored, ...updates } = req.body || {};
+    validateMacro(updates);
+    const result = updateMacro(req.params.id, updates);
+    res.status(result.success ? 200 : 404).json(result);
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.delete('/api/macros/:id', (req, res) => {
+  const result = deleteMacro(req.params.id);
+  res.status(result.success ? 200 : 404).json(result);
+});
+
+app.post('/api/macros/:id/run', async (req, res) => {
+  const macro = getMacroById(req.params.id);
+  if (!macro) return res.status(404).json({ success: false, error: 'Macro not found' });
+  const snapshot = await enqueueMacro(req.params.id);
+  res.json({ success: true, job: snapshot, macro: macro.name });
+});
+
 wss.on('connection', (ws) => {
   const loopback = ws._loopback !== false;
   console.log(`[WS] Client connected (${loopback ? 'loopback' : 'remote'})`);
@@ -643,8 +703,21 @@ function cancelPcShutdown() {
   }
 }
 
-// Give the command pipeline its transport + PC-shutdown trigger.
-configurePipeline({ broadcast, startPcShutdown });
+/** Resolve a macro by (fuzzy) name and enqueue it. Used by the AI `run_macro` tool. */
+async function runMacroByName(name) {
+  const want = String(name || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+  const all = getMacros();
+  const match = all.find((m) => {
+    const n = String(m.name || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+    return n === want || n.includes(want) || want.includes(n);
+  });
+  if (!match) throw new Error(`No macro named "${name}"`);
+  await enqueueMacro(match.id);
+  return { started: match.name };
+}
+
+// Give the command pipeline its transport + PC-shutdown trigger + macro runner.
+configurePipeline({ broadcast, startPcShutdown, runMacroByName });
 
 // ==========================================================================
 // Auto-unlock: when a phone connects over USB and Settings > Phone Security has

@@ -240,6 +240,7 @@
         <div class="tab-header">
           <button class="tab-btn active" id="tab-btn-contacts">CONTACTS</button>
           <button class="tab-btn" id="tab-btn-files">FILES</button>
+          <button class="tab-btn" id="tab-btn-macros">MACROS</button>
           <button class="tab-btn" id="tab-btn-ai">VANI AI</button>
           <button class="tab-btn" id="tab-btn-settings">SETTINGS</button>
         </div>
@@ -387,6 +388,25 @@
             </div>
           </div>
 
+          <!-- MACROS -->
+          <div class="tab-content hidden" id="tab-content-macros">
+            <div class="macro-list" id="macro-list">
+              <div class="fm-empty">Loading macros…</div>
+            </div>
+            <button class="hud-btn btn-secondary btn-full btn-sm" id="btn-new-macro" style="margin-top:10px;">+ NEW MACRO</button>
+
+            <div class="macro-editor hidden" id="macro-editor">
+              <input type="text" id="macro-name" class="hud-input input-sm" placeholder="Macro name (e.g. Gaming Mode)">
+              <input type="text" id="macro-desc" class="hud-input input-sm" placeholder="Description (optional)">
+              <div class="macro-steps" id="macro-steps"></div>
+              <button class="hud-btn btn-secondary btn-full btn-sm" id="btn-add-step">+ ADD STEP</button>
+              <div class="macro-editor-actions">
+                <button class="hud-btn btn-secondary btn-sm" id="btn-cancel-macro">CANCEL</button>
+                <button class="hud-btn btn-primary btn-sm" id="btn-save-macro">SAVE MACRO</button>
+              </div>
+            </div>
+          </div>
+
           <!-- VANI AI CHAT -->
           <div class="tab-content hidden" id="tab-content-ai">
             <div class="ai-status" id="ai-status">Checking AI status…</div>
@@ -426,6 +446,7 @@
   <script src="js/voice.js"></script>
   <script src="js/app.js"></script>
   <script src="js/fileManager.js"></script>
+  <script src="js/macros.js"></script>
   <script src="js/aiChat.js"></script>
 </body>
 </html>

@@ -685,6 +685,7 @@ if (btnTestUnlock) {
 const tabMap = {
   'tab-btn-contacts': 'tab-content-contacts',
   'tab-btn-files': 'tab-content-files',
+  'tab-btn-macros': 'tab-content-macros',
   'tab-btn-ai': 'tab-content-ai',
   'tab-btn-settings': 'tab-content-settings'
 };
