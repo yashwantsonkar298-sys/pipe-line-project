@@ -7,6 +7,10 @@ import { getDeviceDiagnostics } from './adb.js';
 import { runAction, getAction } from './actions/registry.js';
 import { runAssistant } from './ai/assistant.js';
 import { isAiEnabled } from './ai/client.js';
+import { runAgentTask } from './agent/agentLoop.js';
+import { createTrace } from './agent/trace.js';
+import * as skills from './skills/index.js';
+import { readConfig } from './config/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONTACTS_FILE = path.join(__dirname, 'contacts.json');
@@ -52,14 +56,14 @@ export async function runAssistantText(message, session = {}) {
   const broadcast = _broadcast;
 
   if (!isAiEnabled()) {
-    const reply = 'Vani AI is off. Add ANTHROPIC_API_KEY to a .env file (see .env.example) and restart to enable it.';
+    const reply = 'Vani AI is off. Add GEMINI_API_KEY to a .env file (see .env.example) and restart to enable it — a free key comes from aistudio.google.com.';
     broadcast({ type: 'ai_reply', reply, disabled: true });
     return { ok: false, disabled: true, reply };
   }
 
   const config = readJsonFile(CONFIG_FILE, { unlockPin: '', whatsappCoords: { x: 0.91, y: 0.55 } });
   broadcast({ type: 'pipeline_start', command: message });
-  broadcast({ type: 'pipeline_step', step: 0, status: 'success', message: 'Routing to Vani (Claude)...' });
+  broadcast({ type: 'pipeline_step', step: 0, status: 'success', message: 'Routing to Vani (Gemini)...' });
 
   const result = await runAssistant({
     text: message,
@@ -75,6 +79,98 @@ export async function runAssistantText(message, session = {}) {
     ttsMessage: result.reply
   });
   return result;
+}
+
+/**
+ * Map the agent's loop phases onto the five pipeline-visualiser nodes, so the
+ * existing HUD animates the Perceive → Plan → Act → Verify cycle.
+ */
+const AGENT_NODE = { perceiving: 0, planning: 1, thinking: 1, acting: 2, awaiting_confirm: 2 };
+
+/**
+ * Run one autonomous agent task. This is the "advanced pipeline": instead of
+ * one parse → one action, it is a bounded observe/act/verify loop that reads the
+ * real screen between every step.
+ */
+export async function runAgentText(taskText, session = {}) {
+  const broadcast = _broadcast;
+  const task = String(taskText || '').trim();
+  if (!task) return { ok: false, intent: 'AGENT', error: 'Empty task' };
+
+  const config = readConfig();
+  broadcast({ type: 'pipeline_start', command: task });
+
+  const diagnostics = await getDeviceDiagnostics();
+  if (!diagnostics.connected) {
+    const error = 'Mobile device not connected';
+    broadcast({ type: 'pipeline_step', step: 0, status: 'failed', message: 'Device disconnected! Connect the phone over USB with USB debugging enabled.' });
+    broadcast({ type: 'pipeline_end', success: false, error });
+    broadcast({ type: 'agent_done', ok: false, reason: 'no_device', summary: error, steps: 0, costUsd: 0, actions: [] });
+    return { ok: false, intent: 'AGENT', error };
+  }
+
+  const trace = createTrace();
+  broadcast({ type: 'agent_trace', runId: trace.runId, task });
+
+  const result = await runAgentTask({
+    text: task,
+    session,
+    deviceId: diagnostics.deviceId,
+    config,
+    trace,
+    // The app is where memory is switched on; the loop itself stays pure so the
+    // tests and the benchmark can run without it.
+    skills,
+    actionCtx: buildActionCtx(config, session),
+    onEvent: (event) => {
+      broadcast(event);
+
+      if (event.type === 'agent_phase' && AGENT_NODE[event.phase] !== undefined) {
+        broadcast({
+          type: 'pipeline_step',
+          step: AGENT_NODE[event.phase],
+          status: 'pending',
+          message: `${event.phase.replace('_', ' ')}${event.step ? ` (step ${event.step})` : ''}`
+        });
+      } else if (event.type === 'agent_action') {
+        broadcast({
+          type: 'pipeline_step',
+          step: 2,
+          status: event.outcome === 'ok' ? 'success' : 'failed',
+          message: `${event.description} — ${event.outcome}`
+        });
+      } else if (event.type === 'agent_verify') {
+        broadcast({
+          type: 'pipeline_step',
+          step: 3,
+          status: event.changed ? 'success' : 'failed',
+          message: event.changed ? 'Screen changed as expected.' : 'Screen did not change.'
+        });
+      }
+    }
+  });
+
+  broadcast({
+    type: 'pipeline_step',
+    step: 4,
+    status: result.ok ? 'success' : 'failed',
+    message: result.summary || (result.ok ? 'Task complete.' : 'Task did not complete.')
+  });
+  broadcast({
+    type: 'pipeline_end',
+    success: result.ok,
+    error: result.ok ? undefined : result.summary,
+    ttsMessage: result.summary
+  });
+
+  return {
+    ok: result.ok,
+    intent: 'AGENT',
+    runId: trace.runId,
+    tts: result.summary,
+    error: result.ok ? undefined : result.summary,
+    result
+  };
 }
 
 export async function runCommandText(commandText, session = {}, opts = {}) {
@@ -111,7 +207,7 @@ export async function runCommandText(commandText, session = {}, opts = {}) {
 
   if (parsed.intent === 'UNKNOWN') {
     if (isAiEnabled()) {
-      broadcast({ type: 'pipeline_step', step: 0, status: 'success', message: 'NLP miss - escalating to Vani (Claude)...' });
+      broadcast({ type: 'pipeline_step', step: 0, status: 'success', message: 'NLP miss - escalating to Vani (Gemini)...' });
       const aiText = (fromVoice && tried.length > 1)
         ? `The user spoke a command (speech-to-text, may contain errors). Candidates, best first:\n${tried.map((t, i) => `${i + 1}) ${t}`).join('\n')}\nPick the intended command and act on it.`
         : commandText;

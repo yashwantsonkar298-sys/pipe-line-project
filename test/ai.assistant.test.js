@@ -5,7 +5,7 @@ import { runAssistant } from '../server/ai/assistant.js';
 import { buildTools } from '../server/ai/tools.js';
 import { ACTIONS } from '../server/actions/registry.js';
 
-/** A fake Anthropic client that replays a scripted list of responses. */
+/** A fake model client that replays a scripted list of responses. */
 function fakeClient(script) {
   let i = 0;
   const calls = [];
@@ -123,5 +123,5 @@ test('a refusal is surfaced, not retried', async () => {
 test('runs disabled-gracefully with no client and no API key', async () => {
   const r = await runAssistant({ text: 'hi', session: { aiHistory: [] }, client: null });
   assert.equal(r.disabled, true);
-  assert.match(r.reply, /ANTHROPIC_API_KEY/);
+  assert.match(r.reply, /GEMINI_API_KEY/);
 });

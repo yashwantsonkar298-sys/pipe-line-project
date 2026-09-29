@@ -15,6 +15,9 @@ export const MACRO_SCHEMA = {
     name: { type: 'string', minLength: 1, maxLength: 80 },
     description: { type: 'string', maxLength: 200 },
     schedule: { type: ['string', 'null'], maxLength: 64 },
+    // 'command' (the original) replays natural-language steps through the NLP
+    // pipeline; 'agent' replays raw primitives captured from an agent run.
+    kind: { type: 'string', enum: ['command', 'agent'] },
     steps: {
       type: 'array',
       minItems: 1,
@@ -27,6 +30,22 @@ export const MACRO_SCHEMA = {
           delay: { type: 'number', minimum: 0, maximum: 30000 }
         },
         required: ['command']
+      }
+    },
+    primitives: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 32 },
+          input: { type: 'object' },
+          label: { type: 'string', maxLength: 120 },
+          delay: { type: 'number', minimum: 0, maximum: 30000 }
+        },
+        required: ['name']
       }
     }
   },
@@ -102,10 +121,14 @@ export function saveMacro(macro) {
     id: macro.id || `macro-${Date.now()}`,
     name: macro.name || 'Untitled Macro',
     description: macro.description || '',
+    kind: macro.kind === 'agent' ? 'agent' : 'command',
     steps: macro.steps || [],
     schedule: macro.schedule || null,
     createdAt: Date.now()
   };
+  if (Array.isArray(macro.primitives) && macro.primitives.length) {
+    newMacro.primitives = macro.primitives;
+  }
 
   macros.push(newMacro);
   fs.writeFileSync(MACROS_FILE, JSON.stringify(macros, null, 2));
@@ -140,58 +163,84 @@ export function deleteMacro(id) {
   return { success: true, message: 'Macro deleted' };
 }
 
-export async function executeMacro(id, executeCommand, onStep) {
+const DEFAULT_PRIMITIVE_DELAY_MS = 700;
+
+/**
+ * Run a macro.
+ *
+ * Two flavours share this driver:
+ *  - `kind: 'command'` (the original) — each step is natural language, run
+ *    through `executeCommand`, i.e. the NLP pipeline.
+ *  - `kind: 'agent'` — each step is a raw primitive captured from an agent run,
+ *    replayed through `executePrimitive` with no model call at all.
+ *
+ * Both executors are injected so this module stays free of ADB and AI imports.
+ */
+export async function executeMacro(id, executeCommand, onStep, executePrimitive) {
   const macro = getMacroById(id);
   if (!macro) {
     return { success: false, error: 'Macro not found' };
   }
 
+  const replayPrimitives = macro.kind === 'agent'
+    && Array.isArray(macro.primitives)
+    && macro.primitives.length > 0;
+
+  if (replayPrimitives && typeof executePrimitive !== 'function') {
+    return { success: false, error: 'This macro replays recorded actions, which are not available here' };
+  }
+
+  const items = replayPrimitives ? macro.primitives : macro.steps;
   const results = [];
 
-  for (let i = 0; i < macro.steps.length; i++) {
-    const step = macro.steps[i];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const label = replayPrimitives ? (item.label || item.name) : item.command;
 
     if (onStep) {
       onStep({
         macroId: id,
         macroName: macro.name,
         stepIndex: i,
-        totalSteps: macro.steps.length,
-        command: step.command,
+        totalSteps: items.length,
+        command: label,
         status: 'executing'
       });
     }
 
     try {
-      await executeCommand(step.command);
-      results.push({ step: i, command: step.command, success: true });
+      if (replayPrimitives) await executePrimitive(item.name, item.input || {});
+      else await executeCommand(item.command);
+
+      results.push({ step: i, command: label, success: true });
 
       if (onStep) {
         onStep({
           macroId: id,
           stepIndex: i,
-          totalSteps: macro.steps.length,
-          command: step.command,
+          totalSteps: items.length,
+          command: label,
           status: 'success'
         });
       }
     } catch (error) {
-      results.push({ step: i, command: step.command, success: false, error: error.message });
+      results.push({ step: i, command: label, success: false, error: error.message });
 
       if (onStep) {
         onStep({
           macroId: id,
           stepIndex: i,
-          totalSteps: macro.steps.length,
-          command: step.command,
+          totalSteps: items.length,
+          command: label,
           status: 'failed',
           error: error.message
         });
       }
     }
 
-    if (step.delay && i < macro.steps.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, step.delay));
+    const delay = item.delay ?? (replayPrimitives ? DEFAULT_PRIMITIVE_DELAY_MS : 0);
+    if (delay && i < items.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 
@@ -199,7 +248,7 @@ export async function executeMacro(id, executeCommand, onStep) {
     success: results.every(r => r.success),
     macroName: macro.name,
     results,
-    totalSteps: macro.steps.length,
+    totalSteps: items.length,
     successCount: results.filter(r => r.success).length
   };
 }

@@ -65,7 +65,6 @@ test('listAiTools returns valid, self-consistent tool definitions', () => {
     assert.match(tool.name, /^[a-z][a-z0-9_]*$/, `tool name not snake_case: ${tool.name}`);
     assert.ok(!seen.has(tool.name), `duplicate tool name ${tool.name}`);
     seen.add(tool.name);
-    assert.equal(tool.strict, true);
     assert.equal(tool.input_schema.type, 'object');
     assert.equal(tool.input_schema.additionalProperties, false);
     assert.ok(Array.isArray(tool.input_schema.required));

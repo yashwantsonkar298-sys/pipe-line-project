@@ -339,7 +339,6 @@ export function listAiTools() {
     tools.push({
       name: action.aiName,
       description: action.description || action.summary?.({}) || action.aiName,
-      strict: true,
       input_schema: {
         type: 'object',
         properties,

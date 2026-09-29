@@ -1,5 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
-
+import { describeAiError } from './errors.js';
 import { getClient, AI_MODEL } from './client.js';
 import { SYSTEM_PROMPT } from './systemPrompt.js';
 import { buildTools, intentForAiTool } from './tools.js';
@@ -23,9 +22,9 @@ function toolResultText(outcome) {
 }
 
 export async function runAssistant({ text, session = {}, onEvent = () => {}, actionCtx = {}, client }) {
-  const anthropic = client === undefined ? getClient() : client;
-  if (!anthropic) {
-    const reply = 'AI is disabled on this server. Set ANTHROPIC_API_KEY to enable Vani.';
+  const model = client === undefined ? getClient() : client;
+  if (!model) {
+    const reply = 'AI is disabled on this server. Set GEMINI_API_KEY to enable Vani.';
     onEvent({ type: 'ai_reply', reply, disabled: true });
     return { ok: false, disabled: true, reply };
   }
@@ -40,7 +39,7 @@ export async function runAssistant({ text, session = {}, onEvent = () => {}, act
 
   try {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const res = await anthropic.messages.create({
+      const res = await model.messages.create({
         model: AI_MODEL,
         max_tokens: 2048,
         system: SYSTEM_PROMPT,
@@ -103,11 +102,7 @@ export async function runAssistant({ text, session = {}, onEvent = () => {}, act
     onEvent({ type: 'ai_reply', reply, actionsTaken });
     return { ok: false, reply, actionsTaken };
   } catch (err) {
-    let reply;
-    if (err instanceof Anthropic.RateLimitError) reply = 'The AI is rate-limited right now - try again in a moment.';
-    else if (err instanceof Anthropic.AuthenticationError) reply = 'The ANTHROPIC_API_KEY on this server is invalid.';
-    else if (err instanceof Anthropic.APIConnectionError) reply = 'Could not reach the AI service - check the server\'s internet connection.';
-    else reply = `AI error: ${err.message}`;
+    const reply = describeAiError(err);
     onEvent({ type: 'ai_reply', reply, error: true });
     return { ok: false, error: err.message, reply, actionsTaken };
   }

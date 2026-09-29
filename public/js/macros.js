@@ -179,4 +179,7 @@
 
   const tabBtn = document.getElementById('tab-btn-macros');
   if (tabBtn) tabBtn.addEventListener('click', () => { if (!loaded) { loaded = true; load(); } });
+
+  // The Agent Console saves learned runs as macros and needs the list to refresh.
+  window.loadMacros = () => { loaded = true; return load(); };
 })();

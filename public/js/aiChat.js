@@ -33,7 +33,7 @@
     sendBtn.disabled = !aiEnabled;
     input.placeholder = aiEnabled
       ? "Message Vani… (e.g. 'mummy ko whatsapp karo')"
-      : 'Vani is off — add ANTHROPIC_API_KEY to enable';
+      : 'Vani is off — add GEMINI_API_KEY to enable';
   }
 
   function send() {
@@ -41,7 +41,7 @@
     if (!text) return;
     if (!aiEnabled) {
       if (!hintShown) {
-        addMsg('Vani AI is off. Add ANTHROPIC_API_KEY to a .env file (see .env.example) and restart the server.', 'bot');
+        addMsg('Vani AI is off. Get a free key at aistudio.google.com, put it in .env as GEMINI_API_KEY (see .env.example) and restart the server.', 'bot');
         hintShown = true;
       }
       return;
@@ -90,8 +90,8 @@
         applyEnabledState();
         if (statusEl) {
           statusEl.textContent = aiEnabled
-            ? 'Vani online · ' + s.model
-            : 'Vani is disabled — add ANTHROPIC_API_KEY to .env and restart.';
+            ? `Vani online · ${s.model}${s.provider === 'mock' ? ' (mock)' : ''}`
+            : 'Vani is disabled — add GEMINI_API_KEY to .env and restart.';
           statusEl.classList.toggle('ai-status-off', !aiEnabled);
         }
       })

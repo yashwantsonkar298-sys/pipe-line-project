@@ -77,8 +77,8 @@
           </div>
 
 
-          <div class="screen-mirror-wrapper">
-            <div class="phone-frame">
+          <div class="screen-mirror-wrapper" id="screen-mirror-wrapper">
+            <div class="phone-frame" id="phone-frame" tabindex="0" aria-label="Phone screen — click to send your keyboard to the phone">
               <div class="phone-screen" id="phone-screen-container">
                 <img src="" id="phone-screenshot" class="hidden" alt="Mobile Screen Capture">
                 <div class="no-screen-fallback" id="screen-fallback">
@@ -92,23 +92,37 @@
                   <div class="spinner"></div>
                   <span>PULLING SCREEN...</span>
                 </div>
+
+
+                <div class="agent-overlay hidden" id="agent-overlay"></div>
               </div>
             </div>
-            <div style="display: flex; gap: 10px;">
-              <button class="hud-btn btn-secondary btn-full" id="btn-refresh-screen" disabled style="flex: 1;">
+            <div class="mirror-keybar">
+              <button class="mirror-key" data-key="back" title="Back (or right-click the screen)" aria-label="Back">&#9664;</button>
+              <button class="mirror-key" data-key="home" title="Home (or middle-click the screen)" aria-label="Home">&#9679;</button>
+              <button class="mirror-key" data-key="recents" title="Recent apps" aria-label="Recent apps">&#9633;</button>
+              <button class="mirror-key" data-key="volume_down" title="Volume down" aria-label="Volume down">&#8722;</button>
+              <button class="mirror-key" data-key="volume_up" title="Volume up" aria-label="Volume up">&#43;</button>
+              <button class="mirror-key mirror-key-power" data-key="power" title="Power (locks or wakes the screen)" aria-label="Power">&#9211;</button>
+              <div class="mirror-resize" id="mirror-resize" role="separator" aria-label="Drag to resize the mirror" title="Drag to resize the mirror"></div>
+            </div>
+            <div class="mirror-controls">
+              <button class="hud-btn btn-secondary" id="btn-refresh-screen" disabled>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M23 4v6h-6M1 20v-6h6" />
                   <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
                 </svg>
-                REFRESH SCREEN
+                <span>REFRESH SCREEN</span>
               </button>
-              <button class="hud-btn btn-secondary btn-full" id="btn-live-feed" disabled style="flex: 1;">
+              <button class="mirror-view-btn" id="btn-mirror-collapse" title="Collapse the mirror" aria-label="Collapse the mirror">&#9644;</button>
+              <button class="mirror-view-btn" id="btn-mirror-expand" title="Expand the mirror (Esc to close)" aria-label="Expand the mirror">&#9974;</button>
+              <button class="hud-btn btn-secondary" id="btn-live-feed" disabled>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
                 <span id="live-feed-text">LIVE FEED</span>
               </button>
-              <button class="hud-btn btn-secondary btn-sm" id="btn-record" title="Record the screen to an MP4">
+              <button class="hud-btn btn-secondary" id="btn-record" title="Record the screen to an MP4">
                 <span id="record-text">● REC</span>
               </button>
             </div>
@@ -125,7 +139,15 @@
         <div class="panel-content visualizer-content">
 
 
-          <div class="pipeline-flow-container">
+          <div class="pipeline-flow-container" id="pipeline-container">
+            <div class="pipe-scan" aria-hidden="true"></div>
+
+            <div class="pipe-telemetry">
+              <span class="pipe-state" id="pipe-state" data-state="idle">IDLE</span>
+              <span class="pipe-cmd" id="pipe-cmd">awaiting instruction</span>
+              <span class="pipe-clock" id="pipe-clock">--:--</span>
+            </div>
+
             <svg class="pipeline-connector-svg" id="pipeline-svg">
               <path d="M 50 40 L 150 40" id="path-0" class="connector-path"></path>
               <path d="M 150 40 L 250 40" id="path-1" class="connector-path"></path>
@@ -140,7 +162,7 @@
             </svg>
 
             <div class="pipeline-nodes">
-              <div class="pipeline-node" id="node-0" data-label="Speech/Text">
+              <div class="pipeline-node" data-index="0" id="node-0" data-label="Perceive">
                 <div class="node-circle">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -148,9 +170,10 @@
                   </svg>
                 </div>
                 <span>INPUT</span>
+                <em class="node-msg" id="node-msg-0"></em>
               </div>
 
-              <div class="pipeline-node" id="node-1" data-label="NLP Core">
+              <div class="pipeline-node" data-index="1" id="node-1" data-label="Plan / Think">
                 <div class="node-circle">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="10"/>
@@ -159,9 +182,10 @@
                   </svg>
                 </div>
                 <span>INTENT</span>
+                <em class="node-msg" id="node-msg-1"></em>
               </div>
 
-              <div class="pipeline-node" id="node-2" data-label="Resolver">
+              <div class="pipeline-node" data-index="2" id="node-2" data-label="Act">
                 <div class="node-circle">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -171,9 +195,10 @@
                   </svg>
                 </div>
                 <span>TARGET</span>
+                <em class="node-msg" id="node-msg-2"></em>
               </div>
 
-              <div class="pipeline-node" id="node-3" data-label="ADB Compiler">
+              <div class="pipeline-node" data-index="3" id="node-3" data-label="Verify">
                 <div class="node-circle">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="16 18 22 12 16 6"/>
@@ -181,15 +206,17 @@
                   </svg>
                 </div>
                 <span>COMPILE</span>
+                <em class="node-msg" id="node-msg-3"></em>
               </div>
 
-              <div class="pipeline-node" id="node-4" data-label="Device Driver">
+              <div class="pipeline-node" data-index="4" id="node-4" data-label="Done">
                 <div class="node-circle">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                     <polygon points="5 3 19 12 5 21 5 3"/>
                   </svg>
                 </div>
                 <span>EXECUTE</span>
+                <em class="node-msg" id="node-msg-4"></em>
               </div>
             </div>
           </div>
@@ -241,7 +268,8 @@
 
 
         <div class="tab-header">
-          <button class="tab-btn active" id="tab-btn-contacts">CONTACTS</button>
+          <button class="tab-btn tab-btn-hero active" id="tab-btn-agent">⚡ AUTOPILOT</button>
+          <button class="tab-btn" id="tab-btn-contacts">CONTACTS</button>
           <button class="tab-btn" id="tab-btn-files">FILES</button>
           <button class="tab-btn" id="tab-btn-macros">MACROS</button>
           <button class="tab-btn" id="tab-btn-ai">VANI AI</button>
@@ -250,7 +278,70 @@
 
         <div class="panel-content tab-panel-content">
 
-          <div class="tab-content" id="tab-content-contacts">
+
+          <div class="tab-content" id="tab-content-agent">
+
+            <div class="agent-taskbar">
+              <div class="agent-task-row">
+                <button class="agent-mic" id="agent-btn-mic" title="Speak the task">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
+                  </svg>
+                </button>
+                <input type="text" id="agent-task-input" class="hud-input"
+                       placeholder="Describe a task… 'airplane mode on kar do'" autocomplete="off">
+              </div>
+              <div class="agent-btn-row">
+                <button class="hud-btn btn-primary btn-sm agent-run" id="agent-btn-run">▶ RUN</button>
+                <button class="hud-btn btn-danger btn-sm agent-stop" id="agent-btn-stop" disabled>■ STOP</button>
+                <label class="agent-switch" title="Go right up to an irreversible step, then stop">
+                  <input type="checkbox" id="agent-dry-run">
+                  <span>DRY RUN</span>
+                </label>
+              </div>
+            </div>
+
+
+            <div class="agent-statusbar">
+              <span class="agent-chip" id="agent-status-chip">READY</span>
+              <div class="agent-meter">
+                <div class="agent-meter-track"><div class="agent-meter-fill" id="agent-meter-fill"></div></div>
+                <span class="agent-meter-text">
+                  <span id="agent-meter-steps">0/25</span> ·
+                  <span id="agent-meter-cost">0 tok</span>
+                </span>
+              </div>
+            </div>
+
+
+            <div class="agent-section">
+              <h3 class="agent-h3">PLAN</h3>
+              <ul class="agent-plan" id="agent-plan-list"></ul>
+            </div>
+
+
+            <div class="agent-section agent-section-grow">
+              <h3 class="agent-h3">REASONING</h3>
+              <div class="agent-stream" id="agent-stream"></div>
+            </div>
+
+
+            <div class="agent-section">
+              <div class="agent-h3-row">
+                <h3 class="agent-h3">TRACE</h3>
+                <div class="agent-h3-actions">
+                  <button class="hud-btn btn-secondary btn-sm hidden" id="agent-btn-save-macro">★ SAVE AS MACRO</button>
+                  <button class="hud-btn btn-secondary btn-sm" id="agent-btn-runs">PAST RUNS</button>
+                </div>
+              </div>
+              <div class="agent-rail" id="agent-trace-rail"></div>
+              <div class="agent-status-line" id="agent-status-line"></div>
+            </div>
+
+          </div>
+
+          <div class="tab-content hidden" id="tab-content-contacts">
             <div class="contacts-list" id="contacts-list-container">
 
             </div>
@@ -333,6 +424,30 @@
                     </svg>
                     ENABLE WIRELESS
                   </button>
+                </div>
+              </div>
+
+              <div class="settings-group" style="margin-top: 20px;">
+                <h3>PAIR OVER WI-FI (NO CABLE)</h3>
+                <span class="input-desc">
+                  Android 11+. On the phone: Developer options &rarr; <b>Wireless debugging</b> &rarr; ON
+                  &rarr; <b>Pair device with pairing code</b>. Type that dialog's address and 6-digit code below.
+                  Keep the dialog open — its address and code change every time it is reopened.
+                </span>
+                <div class="wireless-controls">
+                  <div class="pair-row">
+                    <input type="text" id="wl-pair-address" class="hud-input" placeholder="192.168.1.7:37123" autocomplete="off" spellcheck="false">
+                    <input type="text" id="wl-pair-code" class="hud-input pair-code" placeholder="123456" inputmode="numeric" maxlength="6" autocomplete="off">
+                  </div>
+                  <button class="hud-btn btn-secondary btn-full" id="btn-wireless-pair">PAIR DEVICE</button>
+
+                  <span class="input-desc">
+                    Step 2 — after pairing, use the <b>IP address &amp; Port</b> shown at the top of the
+                    Wireless debugging screen. That is a different port from the pairing one.
+                  </span>
+                  <input type="text" id="wl-connect-address" class="hud-input" placeholder="192.168.1.7:41235" autocomplete="off" spellcheck="false">
+                  <button class="hud-btn btn-primary btn-full" id="btn-wireless-connect">CONNECT</button>
+                  <span class="wireless-status" id="wl-pair-status">NOT PAIRED</span>
                 </div>
               </div>
             </div>
@@ -455,5 +570,7 @@
   <script src="js/fileManager.js"></script>
   <script src="js/macros.js"></script>
   <script src="js/aiChat.js"></script>
+  <script src="js/agentConsole.js"></script>
+  <script src="js/mirrorView.js"></script>
 </body>
 </html>

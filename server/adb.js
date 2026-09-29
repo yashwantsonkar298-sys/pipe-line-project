@@ -1,6 +1,7 @@
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -96,7 +97,10 @@ export async function runAdb(argsString) {
   }
 
   const cmd = `"${adbPath}" ${argsString}`;
-  log(`Executing: ${cmd}`, 'debug');
+  // Log the command, not the 90-character absolute path in front of it. The
+  // feed is read by a person watching what the phone is being asked to do, and
+  // repeating where adb.exe lives on every line buried that entirely.
+  log(`adb ${argsString}`, 'debug');
   try {
     const { stdout, stderr } = await execAsync(cmd);
     if (stderr && stderr.trim() && !stderr.includes('daemon started successfully')) {
@@ -117,7 +121,7 @@ export async function runAdbArgs(args, opts = {}) {
     await ensureAdbInstalled();
   }
   const { timeout = 20000, maxBuffer = 8 * 1024 * 1024 } = opts;
-  log(`Executing (argv): adb ${args.join(' ')}`, 'debug');
+  log(`adb ${args.join(' ')}`, 'debug');
   try {
     const { stdout, stderr } = await execFileAsync(adbPath, args, { timeout, maxBuffer });
     if (stderr && stderr.trim() && !stderr.includes('daemon started successfully')) {
@@ -153,6 +157,32 @@ export function assertComponent(component) {
 
 export function deviceShellQuote(text) {
   return `'${String(text).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Validates an `host:port` pair typed by a human off the phone's Wireless
+ * debugging screen. Both `pair` and `connect` addresses go through here before
+ * they are handed to adb, so a pasted string can never become extra arguments.
+ * The port is mandatory: Android randomises it per session, and a missing one
+ * silently means 5555, which is the wrong port for the pairing flow.
+ */
+export function assertHostPort(value) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  const match = /^([A-Za-z0-9.-]{1,255}|\[[0-9A-Fa-f:]{2,45}\]):([0-9]{1,5})$/.exec(text);
+  const port = match ? Number(match[2]) : 0;
+  if (!match || port < 1 || port > 65535) {
+    throw new Error(`Invalid address: ${JSON.stringify(value)}. Expected host:port, e.g. 192.168.1.7:37123`);
+  }
+  return text;
+}
+
+/** The 6-digit code Android shows in the "Pair device with pairing code" dialog. */
+export function assertPairingCode(code) {
+  const text = typeof code === 'string' ? code.trim() : '';
+  if (!/^[0-9]{6}$/.test(text)) {
+    throw new Error('Invalid pairing code: expected the 6 digits shown on the phone.');
+  }
+  return text;
 }
 
 export async function getDevices() {
@@ -488,6 +518,110 @@ export async function syncPhoneContacts() {
   }
 }
 
+/** Loopback and link-local are never the address the PC should dial. */
+function isUsableLanIp(ip) {
+  return Boolean(ip) && !ip.startsWith('127.') && !ip.startsWith('169.254.');
+}
+
+/**
+ * The phone's Wi-Fi address.
+ *
+ * Reads the interface directly rather than parsing `ip route`, which is what
+ * this used to do. Android files routes under per-network tables, so on some
+ * devices — a Vivo V2437 on Android 16, for one — the main table `ip route`
+ * prints is simply empty, and the old `src` regex found nothing *even with
+ * Wi-Fi connected and working*. Asking `ip route show table all` instead is no
+ * fix either: the first `src` in that output is 127.0.0.1.
+ */
+/** This PC's own LAN addresses, used to work out which phone address it can reach. */
+function localIPv4Addresses() {
+  const out = [];
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries || []) {
+      if (entry.family === 'IPv4' && !entry.internal && isUsableLanIp(entry.address)) {
+        out.push(entry.address);
+      }
+    }
+  }
+  return out;
+}
+
+const subnet24 = (ip) => ip.split('.').slice(0, 3).join('.');
+
+export async function getWifiIp(deviceId) {
+  const id = assertDeviceId(deviceId);
+  const candidates = [];
+
+  // `ap0` matters as much as `wlan0`: when the phone is running a hotspot and
+  // this PC has joined it, the phone's *client* address (wlan0, on the router's
+  // network) is the one address the PC cannot reach — and on a phone doing
+  // STA+AP at once, both interfaces are up simultaneously.
+  for (const iface of ['wlan0', 'wlan1', 'ap0', 'softap0', 'swlan0']) {
+    try {
+      const out = await runAdbArgs(['-s', id, 'shell', 'ip', '-f', 'inet', 'addr', 'show', iface], { timeout: 8000 });
+      const ip = out.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/)?.[1];
+      if (isUsableLanIp(ip)) candidates.push(ip);
+    } catch {
+      // Interface absent on this device — try the next name.
+    }
+  }
+
+  // Devices that name their interfaces something else entirely.
+  if (!candidates.length) {
+    try {
+      const routes = await runAdbArgs(['-s', id, 'shell', 'ip', 'route', 'show', 'table', 'all'], { timeout: 8000 });
+      for (const m of routes.matchAll(/src\s+(\d+\.\d+\.\d+\.\d+)/g)) {
+        if (isUsableLanIp(m[1])) candidates.push(m[1]);
+      }
+    } catch {  }
+  }
+
+  if (!candidates.length) {
+    let wifiOn = '';
+    try {
+      wifiOn = (await runAdbArgs(['-s', id, 'shell', 'settings', 'get', 'global', 'wifi_on'], { timeout: 8000 })).trim();
+    } catch {  }
+    throw new Error(wifiOn === '0'
+      ? 'Wi-Fi is switched off on the phone. Turn Wi-Fi on (same network as this PC), or start its hotspot and join this PC to it.'
+      : 'Could not read a Wi-Fi address from the phone. Put it on the same network as this PC and try again.');
+  }
+
+  // Prefer an address this PC shares a subnet with — that is the one it stands
+  // any chance of opening a socket to.
+  const localSubnets = new Set(localIPv4Addresses().map(subnet24));
+  return candidates.find((ip) => localSubnets.has(subnet24(ip))) || candidates[0];
+}
+
+/**
+ * Runs `adb connect` and reports whether the device actually showed up.
+ *
+ * `adb connect` exits 0 even when it fails, so its exit code proves nothing.
+ * Nor does its text: the Windows failure reads "...because THE CONNECTED PARTY
+ * did not properly respond...", which sailed straight through the old
+ * `includes('connected')` check and reported success for a dead link — the UI
+ * then told people to unplug a cable that was the only thing working. The
+ * device list is the only answer that cannot lie.
+ */
+async function connectAndVerify(address) {
+  log(`Connecting to ${address} wirelessly...`, 'info');
+  // An unreachable host makes adb sit on the OS TCP timeout, ~21s on Windows,
+  // so allow for that. A throw here (timeout, non-zero exit) is not fatal on
+  // its own — the device-list check below decides, and callers phrase the
+  // failure far better than a raw "Command failed" ever could.
+  let output = '';
+  try {
+    output = (await runAdbArgs(['connect', address], { timeout: 45000 })).trim();
+  } catch (connectError) {
+    output = String(connectError.stdout || connectError.message || '').trim();
+  }
+  log(`Wireless connection result: ${output}`, 'info');
+
+  const connected = (await getDevices()).some(
+    (d) => d.id === address && d.status === 'device'
+  );
+  return { connected, output };
+}
+
 export async function enableWirelessAdb() {
   const devices = await getDevices();
   if (devices.length === 0) {
@@ -498,33 +632,85 @@ export async function enableWirelessAdb() {
   log('Enabling wireless ADB mode...', 'info');
 
   try {
-    const ipOutput = await runAdb(`-s ${deviceId} shell ip route`);
-    const ipMatch = ipOutput.match(/src\s+(\d+\.\d+\.\d+\.\d+)/);
-
-    if (!ipMatch) {
-      throw new Error('Could not determine device Wi-Fi IP address. Ensure phone is connected to WiFi.');
-    }
-    const phoneIp = ipMatch[1];
+    const phoneIp = await getWifiIp(deviceId);
     log(`Device Wi-Fi IP detected: ${phoneIp}`, 'info');
 
     log('Switching ADB transport to TCP/IP on port 5555...', 'info');
     await runAdb(`-s ${deviceId} tcpip 5555`);
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    log(`Connecting to ${phoneIp}:5555 wirelessly...`, 'info');
-    const connectResult = await runAdb(`connect ${phoneIp}:5555`);
-    log(`Wireless connection result: ${connectResult}`, 'success');
+    const address = `${phoneIp}:5555`;
+    const { connected, output } = await connectAndVerify(address);
 
-    if (connectResult.includes('connected') || connectResult.includes('already connected')) {
-      log(`Wireless ADB activated successfully! You can now remove the USB cable.`, 'success');
-      return { success: true, ip: phoneIp, port: 5555 };
-    } else {
-      throw new Error(`Connection response: ${connectResult}`);
+    if (!connected) {
+      throw new Error(
+        `Could not reach ${address}. adb said: ${output || '(nothing)'}. ` +
+        'The phone is on Wi-Fi, but nothing on this PC can open a TCP connection to it — ' +
+        'check for client/AP isolation on the router, or use Android 11+ ' +
+        'Wireless debugging (Developer options) instead of port 5555.'
+      );
     }
+
+    log('Wireless ADB activated successfully! You can now remove the USB cable.', 'success');
+    return { success: true, ip: phoneIp, port: 5555 };
   } catch (error) {
     log(`Wireless ADB setup failed: ${error.message}`, 'error');
     throw error;
   }
+}
+
+/**
+ * Android 11+ pairing — the cable-free path.
+ *
+ * The phone's "Pair device with pairing code" dialog shows a one-shot address
+ * and a 6-digit code; both are only valid while that dialog is open. Pairing
+ * does not connect: it authorises this PC's key, after which the *other*
+ * address on the Wireless debugging screen is the one to connect to.
+ */
+export async function pairWirelessDevice(address, code) {
+  const target = assertHostPort(address);
+  const pin = assertPairingCode(code);
+
+  log(`Pairing with ${target}...`, 'info');
+  let output = '';
+  try {
+    // `adb pair` holds the socket open until the phone answers, and the code is
+    // passed as an argument so nothing waits on stdin.
+    output = (await runAdbArgs(['pair', target, pin], { timeout: 60000 })).trim();
+  } catch (pairError) {
+    output = String(pairError.stdout || pairError.message || '').trim();
+  }
+
+  // Unlike `connect`, pairing leaves no device-list entry to verify against —
+  // adb's own wording is the only signal available.
+  if (!/successfully paired/i.test(output)) {
+    throw new Error(
+      `Pairing with ${target} failed. adb said: ${output || '(nothing)'}. ` +
+      'The pairing dialog must still be open on the phone (its address and code ' +
+      'change every time it is reopened), and both devices must be on the same network.'
+    );
+  }
+
+  log(`Paired with ${target}. Now connect using the address shown on the Wireless debugging screen.`, 'success');
+  return { success: true, address: target, output };
+}
+
+/** Connects to an already-paired phone at the address from its Wireless debugging screen. */
+export async function connectWirelessDevice(address) {
+  const target = assertHostPort(address);
+  const { connected, output } = await connectAndVerify(target);
+
+  if (!connected) {
+    throw new Error(
+      `Could not connect to ${target}. adb said: ${output || '(nothing)'}. ` +
+      'Check that the phone is paired with this PC, that Wireless debugging is still on ' +
+      '(the port changes each time it is toggled), and that both are on the same network ' +
+      'with no client/AP isolation.'
+    );
+  }
+
+  log(`Connected wirelessly to ${target}.`, 'success');
+  return { success: true, address: target };
 }
 
 export async function disableWirelessAdb() {
@@ -980,6 +1166,46 @@ export async function openNotifications() {
   log('Pulling down notification shade...', 'info');
   await runAdb(`-s ${id} shell cmd statusbar expand-notifications`);
   log('Notification shade opened.', 'success');
+}
+
+const KEYEVENTS = Object.freeze({
+  back: 'KEYCODE_BACK',
+  home: 'KEYCODE_HOME',
+  enter: 'KEYCODE_ENTER',
+  recents: 'KEYCODE_APP_SWITCH',
+  delete: 'KEYCODE_DEL',
+  search: 'KEYCODE_SEARCH',
+  tab: 'KEYCODE_TAB',
+  escape: 'KEYCODE_ESCAPE',
+  power: 'KEYCODE_POWER',
+  // Added for the mirror's key bar and PC keyboard passthrough. The agent's
+  // `press_key` enum reads the same map, so these are available to it too;
+  // the safety classifier scores everything but `power` as safe.
+  volume_up: 'KEYCODE_VOLUME_UP',
+  volume_down: 'KEYCODE_VOLUME_DOWN',
+  volume_mute: 'KEYCODE_VOLUME_MUTE',
+  up: 'KEYCODE_DPAD_UP',
+  down: 'KEYCODE_DPAD_DOWN',
+  left: 'KEYCODE_DPAD_LEFT',
+  right: 'KEYCODE_DPAD_RIGHT'
+});
+
+export function keyEventCodeFor(name) {
+  return KEYEVENTS[String(name || '').toLowerCase()];
+}
+
+export function listKeyEventNames() {
+  return Object.keys(KEYEVENTS);
+}
+
+/** Press a named navigation key. Only names in KEYEVENTS are accepted. */
+export async function pressKeyEvent(name, deviceId) {
+  const code = keyEventCodeFor(name);
+  if (!code) throw new Error(`Unsupported key: ${JSON.stringify(name)}`);
+  const id = assertDeviceId(deviceId || await getFirstDevice());
+  log(`Pressing ${code}...`, 'info');
+  await runAdbArgs(['-s', id, 'shell', 'input', 'keyevent', code], { timeout: 8000 });
+  return { success: true, key: code };
 }
 
 export async function typeText(text) {

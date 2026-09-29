@@ -1,3 +1,7 @@
+// MUST be first: populates process.env from .env before any module below
+// reads it at import time (see server/env.js).
+import './env.js';
+
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
@@ -15,13 +19,19 @@ import {
   syncPhoneContacts,
   enableWirelessAdb,
   disableWirelessAdb,
+  pairWirelessDevice,
+  connectWirelessDevice,
   isPhoneLocked,
-  unlockPhone
+  unlockPhone,
+  pressKeyEvent,
+  keyEventCodeFor,
+  listKeyEventNames,
+  typeText
 } from './adb.js';
 import { getDiagnostics, currentDeviceKey, invalidateDiagnostics } from './deviceState.js';
 import { JobQueue, JOB_STATES } from './jobQueue.js';
-import { configurePipeline, runCommandText, runAssistantText } from './pipeline.js';
-import { isAiEnabled, AI_MODEL } from './ai/client.js';
+import { configurePipeline, runCommandText, runAssistantText, runAgentText } from './pipeline.js';
+import { isAiEnabled, AI_MODEL, providerName } from './ai/client.js';
 import {
   assertJsonSchema,
   sendSafeError,
@@ -62,6 +72,8 @@ import {
   validateMacro
 } from './macros.js';
 import { captureFrame, sendTap, sendSwipe, scaleToDevice } from './screenMirror.js';
+import { startStream, stopStream, isStreaming, streamStatus } from './screenStream.js';
+import * as skills from './skills/index.js';
 import {
   installApk,
   uninstallPackage,
@@ -70,13 +82,14 @@ import {
   stopRecording,
   isRecording
 } from './deviceOps.js';
+import { captureState } from './agent/perception.js';
+import { runPrimitive } from './agent/tools.js';
+import { listTraces, getTrace, getStepImagePath, traceToMacro, assertRunId } from './agent/trace.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-try {
-  process.loadEnvFile(path.join(__dirname, '..', '.env'));
-  console.log('[CONFIG] Loaded .env');
-} catch {  }
+// .env is loaded by the './env.js' import at the top of this file — it has to
+// happen before the imports above are evaluated, not here.
 
 const PORT = process.env.PORT || 3000;
 
@@ -261,6 +274,80 @@ app.post('/api/mirror/swipe', inputLimiter.middleware, async (req, res) => {
   }
 });
 
+/**
+ * Hardware keys from the mirror's key bar and from PC keyboard passthrough.
+ * `pressKeyEvent` rejects anything outside its own allowlist, so an unknown
+ * key name fails closed here rather than reaching the device.
+ *
+ * Unlike tap and swipe this is not gated on the live mirror: a key press does
+ * not depend on where the screen was when the frame was captured.
+ */
+app.post('/api/mirror/key', inputLimiter.middleware, async (req, res) => {
+  try {
+    // Check the name here so a typo reads as "Unsupported key", not as the
+    // generic 500 that sendSafeError turns every unrecognised throw into.
+    const key = String(req.body?.key ?? '').slice(0, 40);
+    if (!keyEventCodeFor(key)) {
+      return res.status(400).json({
+        error: `Unsupported key: ${JSON.stringify(key)}`,
+        supported: listKeyEventNames()
+      });
+    }
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    res.json(await pressKeyEvent(key, diag.deviceId));
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+/** Text typed on the PC keyboard, batched by the client into one call. */
+app.post('/api/mirror/text', inputLimiter.middleware, async (req, res) => {
+  try {
+    const diag = await getDiagnostics();
+    if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    await typeText(req.body?.text);
+    res.json({ success: true });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+/**
+ * What the agent has learned. Worth exposing plainly: a skill is a recording of
+ * something done on someone's own phone, and they should be able to see the
+ * whole list and drop any of it.
+ */
+app.get('/api/skills', (req, res) => {
+  try {
+    res.json({
+      skills: skills.store.listSkills().map((s) => ({
+        id: s.id,
+        name: s.name,
+        task: s.task,
+        template: s.template,
+        app: s.app,
+        params: s.params,
+        steps: s.steps.map((step) => step.description || step.name),
+        uses: s.uses,
+        successes: s.successes,
+        createdAt: s.createdAt,
+        lastUsedAt: s.lastUsedAt
+      }))
+    });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.delete('/api/skills/:id', (req, res) => {
+  try {
+    res.json({ success: skills.store.deleteSkill(String(req.params.id)) });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
 app.post('/api/unlock', async (req, res) => {
   try {
     const cfg = readConfig();
@@ -319,6 +406,28 @@ app.post('/api/wireless/enable', async (req, res) => {
   }
 });
 
+// Android 11+ pairing: no USB cable involved at any point. The phone shows a
+// one-shot address and code; the operator types them in here.
+app.post('/api/wireless/pair', async (req, res) => {
+  try {
+    const result = await pairWirelessDevice(req.body?.address, req.body?.code);
+    res.json(result);
+  } catch (error) {
+    // A rejected address, code or pairing attempt is the caller's input to fix,
+    // not a server fault — a 500 here would read as "the app is broken".
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/wireless/connect', async (req, res) => {
+  try {
+    const result = await connectWirelessDevice(req.body?.address);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.post('/api/wireless/disable', async (req, res) => {
   try {
     const result = await disableWirelessAdb();
@@ -331,7 +440,11 @@ app.post('/api/wireless/disable', async (req, res) => {
 const aiLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
 app.get('/api/ai/status', (req, res) => {
-  res.json({ enabled: isAiEnabled(), model: isAiEnabled() ? AI_MODEL : null });
+  res.json({
+    enabled: isAiEnabled(),
+    model: isAiEnabled() ? AI_MODEL : null,
+    provider: providerName()
+  });
 });
 
 app.post('/api/ai/chat', aiLimiter.middleware, async (req, res) => {
@@ -343,6 +456,84 @@ app.post('/api/ai/chat', aiLimiter.middleware, async (req, res) => {
     const result = await runAssistantText(message, session);
     res.json({ reply: result.reply, ok: result.ok, actionsTaken: result.actionsTaken || [] });
   } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+const agentLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+
+app.get('/api/agent/status', async (req, res) => {
+  const cfg = readConfig();
+  let deviceConnected = false;
+  try {
+    deviceConnected = Boolean((await getDiagnostics()).connected);
+  } catch {  }
+  res.json({
+    enabled: isAiEnabled() && cfg.agentMode,
+    aiEnabled: isAiEnabled(),
+    agentMode: cfg.agentMode,
+    provider: providerName(),
+    model: isAiEnabled() ? AI_MODEL : null,
+    requestsPerMinute: cfg.aiRequestsPerMinute,
+    dryRun: cfg.agentDryRun,
+    maxSteps: cfg.agentMaxSteps,
+    costCapUsd: cfg.agentCostCapUsd,
+    appAllowlist: cfg.agentAppAllowlist,
+    deviceConnected
+  });
+});
+
+app.post('/api/agent/run', agentLimiter.middleware, async (req, res) => {
+  try {
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!text.trim()) return res.status(400).json({ error: 'text is required' });
+    if (text.length > 1000) return res.status(400).json({ error: 'text too long' });
+    if (!isAiEnabled()) return res.status(409).json({ error: 'Agent disabled — set GEMINI_API_KEY (or NEXUSFLOW_AI_PROVIDER=mock)' });
+
+    // No socket here, so nothing can answer a confirmation prompt: risky steps
+    // are refused rather than silently auto-approved.
+    const session = { requireConfirm: true, confirm: async () => false };
+    const snapshot = await enqueueAgentTask(text, session, { source: 'api' });
+    res.json({ success: true, job: snapshot });
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.get('/api/agent/traces', (req, res) => {
+  res.json({ traces: listTraces() });
+});
+
+app.get('/api/agent/traces/:id', (req, res) => {
+  try {
+    const trace = getTrace(assertRunId(req.params.id));
+    if (!trace) return res.status(404).json({ error: 'Trace not found' });
+    res.json(trace);
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.get('/api/agent/traces/:id/step/:step.png', screenLimiter.middleware, (req, res) => {
+  try {
+    const file = getStepImagePath(assertRunId(req.params.id), req.params.step);
+    if (!file) return res.status(404).json({ error: 'No screenshot for that step' });
+    res.set('Cache-Control', 'no-store');
+    res.type('png').sendFile(file);
+  } catch (error) {
+    sendSafeError(res, error);
+  }
+});
+
+app.post('/api/agent/traces/:id/save-as-macro', (req, res) => {
+  try {
+    const macro = traceToMacro(assertRunId(req.params.id), { name: req.body?.name });
+    validateMacro(macro);
+    res.json(saveMacro(macro));
+  } catch (error) {
+    if (/not found|no replayable/i.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
     sendSafeError(res, error);
   }
 });
@@ -513,8 +704,11 @@ app.post('/api/record/start', async (req, res) => {
   try {
     const diag = await getDiagnostics();
     if (!diag.connected) return res.status(409).json({ error: 'No device connected' });
+    // Both use the device's single `screenrecord`; the stream steps aside.
+    await pauseStreamForRecording();
     res.json(await startRecording(diag.deviceId));
   } catch (error) {
+    await resumeStreamAfterRecording();
     sendSafeError(res, error);
   }
 });
@@ -523,8 +717,10 @@ app.post('/api/record/stop', async (req, res) => {
   try {
     const result = await stopRecording();
     lastRecording = { path: result.path, fileName: result.fileName };
+    await resumeStreamAfterRecording();
     res.json({ success: true, fileName: result.fileName, size: result.size, url: '/api/record/latest?t=' + Date.now() });
   } catch (error) {
+    await resumeStreamAfterRecording();
     sendSafeError(res, error);
   }
 });
@@ -567,6 +763,85 @@ function broadcast(data) {
   });
 }
 
+/**
+ * Live MJPEG stream viewers.
+ *
+ * Frames go only to sockets that asked for them — a binary broadcast to every
+ * client would push ~500 KB/s at idle tabs that are not showing the mirror.
+ * The pipeline runs only while at least one viewer is attached.
+ */
+const streamViewers = new Set();
+let streamPausedForRecording = false;
+
+function sendStreamStatus(target, extra = {}) {
+  const message = JSON.stringify({ type: 'mirror_stream_status', ...streamStatus(), ...extra });
+  const targets = target ? [target] : streamViewers;
+  for (const client of targets) {
+    if (client.readyState === 1) client.send(message);
+  }
+}
+
+function pushFrame(frame) {
+  for (const client of streamViewers) {
+    // Skip a client whose socket is already backed up rather than queueing
+    // frames it will never catch up on.
+    if (client.readyState === 1 && client.bufferedAmount < 2 * 1024 * 1024) {
+      client.send(frame, { binary: true });
+    }
+  }
+}
+
+async function ensureStreamRunning() {
+  if (!streamViewers.size || streamPausedForRecording || isStreaming()) return;
+
+  const diag = await getDiagnostics();
+  if (!diag.connected) {
+    sendStreamStatus(null, { streaming: false, reason: 'No device connected' });
+    return;
+  }
+
+  const result = await startStream({
+    deviceId: diag.deviceId,
+    onFrame: pushFrame,
+    onStatus: (status) => sendStreamStatus(null, status)
+  });
+
+  if (!result.started) {
+    sendStreamStatus(null, { streaming: false, reason: result.reason });
+    return;
+  }
+  sendStreamStatus();
+}
+
+async function addStreamViewer(ws) {
+  streamViewers.add(ws);
+  await ensureStreamRunning();
+  sendStreamStatus(ws);
+}
+
+function removeStreamViewer(ws) {
+  if (!streamViewers.delete(ws)) return;
+  if (!streamViewers.size) stopStream();
+}
+
+/**
+ * `screenrecord` is a single-instance affair on the device, and stopping a
+ * recording does `pkill screenrecord`, which would take the live stream down
+ * with it. So the stream stands aside while a recording runs.
+ */
+async function pauseStreamForRecording() {
+  streamPausedForRecording = true;
+  if (isStreaming()) {
+    stopStream();
+    sendStreamStatus(null, { streaming: false, reason: 'paused while recording' });
+  }
+}
+
+async function resumeStreamAfterRecording() {
+  streamPausedForRecording = false;
+  await ensureStreamRunning();
+}
+
 setLogCallback((logObj) => {
   broadcast({ type: 'adb_log', log: logObj });
 });
@@ -584,14 +859,30 @@ async function enqueueCommand(text, session, opts = {}) {
   );
 }
 
+async function enqueueAgentTask(text, session, opts = {}) {
+  const key = await currentDeviceKey();
+  return jobs.enqueue(
+    key,
+    () => runAgentText(text, session),
+    { kind: 'agent', text, source: opts.source || 'text' }
+  );
+}
+
 const MACRO_SESSION = { nlpContext: {}, requireConfirm: false };
 
 async function enqueueMacro(id) {
   const key = await currentDeviceKey();
+  const diag = await getDiagnostics();
   return jobs.enqueue(key, () => executeMacro(
     id,
     (command) => runCommandText(command, MACRO_SESSION),
-    (step) => broadcast({ type: 'macro_step', step })
+    (step) => broadcast({ type: 'macro_step', step }),
+    // Learned macros replay raw primitives against a freshly-read screen, so a
+    // recorded tap_element still resolves even though indices have moved on.
+    async (name, input) => {
+      const state = await captureState({ deviceId: diag.deviceId, withImage: false });
+      return runPrimitive(name, input, { state, deviceId: diag.deviceId });
+    }
   ), { kind: 'macro', id });
 }
 
@@ -687,6 +978,32 @@ wss.on('connection', (ws) => {
         }
       }
 
+      else if (payload.type === 'agent_task') {
+        const text = String(payload.text || payload.command || '').slice(0, 1000);
+        if (text.trim()) {
+          const snapshot = await enqueueAgentTask(text, ws.session, {
+            source: payload.source === 'voice' ? 'voice' : 'text'
+          });
+          ws.send(JSON.stringify({ type: 'command_queued', job: snapshot }));
+        }
+      }
+
+      else if (payload.type === 'mirror_stream_start') {
+        await addStreamViewer(ws);
+      }
+
+      else if (payload.type === 'mirror_stream_stop') {
+        removeStreamViewer(ws);
+      }
+
+      else if (payload.type === 'agent_abort') {
+        // The budget handle is set by the loop while a run is in flight.
+        if (ws.session.agentBudget) {
+          ws.session.agentBudget.abort('user');
+          ws.send(JSON.stringify({ type: 'agent_event', level: 'info', message: 'Stopping after the current step…' }));
+        }
+      }
+
       else if (payload.type === 'confirm_action') {
         const resolver = pendingConfirms.get(String(payload.id || ''));
         if (resolver) resolver(payload.approved === true);
@@ -712,6 +1029,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     for (const resolver of pendingConfirms.values()) resolver(false);
     pendingConfirms.clear();
+    removeStreamViewer(ws);
     console.log('[WS] Client disconnected');
   });
 });
@@ -858,6 +1176,8 @@ function shutdown(signal) {
   console.log(`\n[SERVER] ${signal} received - shutting down gracefully...`);
   clearInterval(diagnosticsPoll);
   cancelPcShutdown();
+  // adb and ffmpeg children would otherwise outlive us and hold the device.
+  stopStream();
 
   const deadline = Date.now() + 4000;
   const finish = () => {

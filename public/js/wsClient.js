@@ -27,6 +27,9 @@
   function connect() {
     try {
       ws = new WebSocket(endpoint());
+      // The live mirror arrives as binary JPEG frames; ArrayBuffer avoids the
+      // async Blob hop on every one of them.
+      ws.binaryType = 'arraybuffer';
     } catch (e) {
       scheduleReconnect();
       return;

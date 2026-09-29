@@ -64,11 +64,22 @@ socket.addEventListener('reconnecting', ({ delay, everConnected }) => {
 });
 
 socket.addEventListener('message', (event) => {
-  const data = JSON.parse(event.data);
+  // Binary payloads are live mirror frames, handled by the stream wiring below.
+  if (typeof event.data !== 'string') {
+    onStreamFrame(event.data);
+    return;
+  }
+
+  let data;
+  try { data = JSON.parse(event.data); } catch { return; }
 
   switch (data.type) {
     case 'diagnostics':
       updateDiagnosticsHUD(data.data);
+      break;
+
+    case 'mirror_stream_status':
+      onStreamStatus(data);
       break;
 
     case 'adb_log':
@@ -88,7 +99,7 @@ socket.addEventListener('message', (event) => {
       break;
 
     case 'pipeline_start':
-      resetPipelineNodes();
+      resetPipelineNodes(data.command);
       appendTerminalLine(`[PIPELINE START] Instruction: "${data.command}"`, 'adb-info');
       break;
 
@@ -97,6 +108,7 @@ socket.addEventListener('message', (event) => {
       break;
 
     case 'pipeline_end':
+      endPipeline(data.success, data.error);
       appendTerminalLine(`[PIPELINE END] Success: ${data.success}${data.error ? ' | Error: ' + data.error : ''}`, data.success ? 'adb-success' : 'adb-error');
 
       if (data.success) {
@@ -223,16 +235,64 @@ function confirmDialog(message, { okText = 'Confirm', cancelText = 'Cancel', dan
 }
 
 
-function resetPipelineNodes() {
-  const nodes = document.querySelectorAll('.pipeline-node');
-  nodes.forEach(node => {
+/**
+ * Pipeline telemetry.
+ *
+ * The strip is driven entirely by events the server already sends —
+ * `pipeline_start`, `pipeline_step` and `pipeline_end`. The per-stage `message`
+ * used to go only to the terminal; it now also lands on the stage it describes,
+ * which is what makes the strip worth looking at.
+ */
+const pipeContainer = document.getElementById('pipeline-container');
+const pipeState = document.getElementById('pipe-state');
+const pipeCmd = document.getElementById('pipe-cmd');
+const pipeClock = document.getElementById('pipe-clock');
+
+let pipeStartedAt = null;
+let pipeClockTimer = null;
+
+function setPipeState(state, label) {
+  if (!pipeState) return;
+  pipeState.dataset.state = state;
+  pipeState.textContent = label;
+  if (pipeContainer) pipeContainer.classList.toggle('is-running', state === 'run');
+}
+
+function stopPipeClock() {
+  clearInterval(pipeClockTimer);
+  pipeClockTimer = null;
+}
+
+function startPipeClock() {
+  stopPipeClock();
+  pipeStartedAt = Date.now();
+  const tick = () => {
+    if (!pipeClock || pipeStartedAt === null) return;
+    const s = (Date.now() - pipeStartedAt) / 1000;
+    pipeClock.textContent = `${s.toFixed(1)}s`;
+  };
+  tick();
+  pipeClockTimer = setInterval(tick, 100);
+}
+
+function resetPipelineNodes(command) {
+  document.querySelectorAll('.pipeline-node').forEach((node) => {
     node.className = 'pipeline-node';
   });
-
-  const glowPaths = document.querySelectorAll('.glow-connector-path');
-  glowPaths.forEach(path => {
+  document.querySelectorAll('.node-msg').forEach((el) => { el.textContent = ''; });
+  document.querySelectorAll('.glow-connector-path').forEach((path) => {
     path.classList.add('hidden');
   });
+
+  setPipeState('run', 'EXECUTING');
+  if (pipeCmd) pipeCmd.textContent = command ? `» ${command}` : 'running…';
+  startPipeClock();
+}
+
+function endPipeline(success, error) {
+  stopPipeClock();
+  setPipeState(success ? 'ok' : 'fail', success ? 'COMPLETE' : 'FAILED');
+  if (pipeCmd && !success && error) pipeCmd.textContent = `» ${error}`;
 }
 
 function updatePipelineStep(stepIndex, status, logMessage) {
@@ -245,14 +305,14 @@ function updatePipelineStep(stepIndex, status, logMessage) {
     node.classList.add('active');
   } else if (status === 'success') {
     node.classList.add('success');
-
-    const glowPath = document.getElementById(`glow-path-${stepIndex}`);
-    if (glowPath) {
-      glowPath.classList.remove('hidden');
-    }
+    // Light the wire out of this stage: packets flow toward the next one.
+    document.getElementById(`glow-path-${stepIndex}`)?.classList.remove('hidden');
   } else if (status === 'failed') {
     node.classList.add('failed');
   }
+
+  const readout = document.getElementById(`node-msg-${stepIndex}`);
+  if (readout) readout.textContent = String(logMessage || '');
 
   appendTerminalLine(`[PIPELINE STAGE ${stepIndex}] ${logMessage}`, status === 'success' ? 'adb-success' : (status === 'failed' ? 'adb-error' : 'system'));
 }
@@ -288,11 +348,40 @@ window.addEventListener('resize', drawConnectorPaths);
 setTimeout(drawConnectorPaths, 500);
 
 
+/**
+ * The device poller runs the same handful of `getprop` / `dumpsys` calls every
+ * few seconds. Printed in full they bury everything that actually happened, so
+ * a repeat of the previous line becomes a counter on that line instead.
+ */
+let lastLine = null;
+
+function trimAdbNoise(text) {
+  return String(text)
+    // The device serial is in the header already; on every line it is padding.
+    .replace(/^adb\s+-s\s+\S+\s+/, 'adb ')
+    // The absolute path to adb.exe, if any older caller still emits it.
+    .replace(/"[^"]*adb\.exe"\s*/g, 'adb ');
+}
+
 function appendTerminalLine(text, type = 'system') {
+  const clean = trimAdbNoise(text);
+
+  if (lastLine && lastLine.text === clean && lastLine.type === type) {
+    lastLine.count += 1;
+    lastLine.el.dataset.repeat = `×${lastLine.count}`;
+    consoleLogs.scrollTop = consoleLogs.scrollHeight;
+    return;
+  }
+
   const line = document.createElement('div');
   line.className = `console-line ${type}`;
-  line.textContent = text;
+  line.textContent = clean;
   consoleLogs.appendChild(line);
+
+  // Keep the feed bounded — an all-day session should not grow without limit.
+  while (consoleLogs.childElementCount > 300) consoleLogs.removeChild(consoleLogs.firstChild);
+
+  lastLine = { text: clean, type, el: line, count: 1 };
   consoleLogs.scrollTop = consoleLogs.scrollHeight;
 }
 
@@ -309,6 +398,8 @@ function updateDiagnosticsHUD(data) {
     diagRes.textContent = 'N/A';
 
     btnRefreshScreen.disabled = true;
+    btnLiveFeed.disabled = true;
+    setMirrorKeysEnabled(false);
     phoneScreenshot.classList.add('hidden');
     screenFallback.classList.remove('hidden');
     return;
@@ -331,6 +422,7 @@ function updateDiagnosticsHUD(data) {
   diagRes.textContent = data.resolution;
   btnRefreshScreen.disabled = false;
   btnLiveFeed.disabled = false;
+  setMirrorKeysEnabled(true);
 }
 
 btnRefreshScreen.addEventListener('click', async () => {
@@ -340,7 +432,14 @@ btnRefreshScreen.addEventListener('click', async () => {
 });
 
 let liveFeedInterval = null;
+/** Poller handle. Null while the WebSocket stream is carrying the picture. */
 let mirrorTimer = null;
+/**
+ * Whether the mirror is on at all, regardless of which transport is feeding
+ * it. The input handlers gate on this: they used to test `mirrorTimer`, which
+ * silently disabled tapping the moment the stream took over from the poller.
+ */
+let mirrorLive = false;
 let mirrorBusy = false;
 let mirrorObjectUrl = null;
 const MIRROR_INTERVAL_MS = 300;
@@ -365,19 +464,67 @@ async function pullMirrorFrame() {
   }
 }
 
+/**
+ * Paint one frame of the WebSocket video stream.
+ *
+ * The first frame to arrive retires the poller: both write the same <img>, so
+ * running them together would just fight over it at two different rates.
+ */
+function onStreamFrame(buffer) {
+  if (!mirrorLive) return;
+
+  if (mirrorTimer) {
+    clearInterval(mirrorTimer);
+    mirrorTimer = null;
+    // No fixed rate quoted: the device only encodes when the screen changes,
+    // so this runs ~30 fps while things move and near zero while they do not.
+    appendTerminalLine('[MIRROR] Live video stream connected.', 'adb-info');
+  }
+
+  const url = URL.createObjectURL(new Blob([buffer], { type: 'image/jpeg' }));
+  phoneScreenshot.src = url;
+  phoneScreenshot.classList.remove('hidden');
+  screenFallback.classList.add('hidden');
+  if (mirrorObjectUrl) URL.revokeObjectURL(mirrorObjectUrl);
+  mirrorObjectUrl = url;
+}
+
+/** The server telling us whether the video stream is actually up. */
+function onStreamStatus(status) {
+  if (!mirrorLive || status.streaming) return;
+
+  // Stream unavailable or dropped — make sure the poller is carrying things.
+  if (!mirrorTimer) {
+    pullMirrorFrame();
+    mirrorTimer = setInterval(pullMirrorFrame, MIRROR_INTERVAL_MS);
+  }
+  if (status.reason) {
+    appendTerminalLine(`[MIRROR] Video stream unavailable (${status.reason}) — using the frame poller.`, 'adb-warning');
+  }
+}
+
+/**
+ * Start with the poller so there is a picture immediately, and ask for the
+ * video stream in parallel; if it comes up it takes over, and if it never does
+ * the poller is already running.
+ */
 function startMirror() {
+  mirrorLive = true;
   liveFeedText.textContent = 'STOP MIRROR';
   btnLiveFeed.classList.add('active', 'btn-primary');
   btnLiveFeed.classList.remove('btn-secondary');
   phoneScreenContainer.classList.add('mirror-live');
-  appendTerminalLine('[MIRROR] Live mirror ON (~3 fps). Click the screen to tap, drag to swipe.', 'adb-info');
+  appendTerminalLine('[MIRROR] Live mirror ON. Click to tap, drag to swipe, hold to long-press, right-click for back.', 'adb-info');
   pullMirrorFrame();
   mirrorTimer = setInterval(pullMirrorFrame, MIRROR_INTERVAL_MS);
+  socket.send({ type: 'mirror_stream_start' });
 }
 
 function stopMirror() {
+  mirrorLive = false;
   clearInterval(mirrorTimer);
   mirrorTimer = null;
+  socket.send({ type: 'mirror_stream_stop' });
   liveFeedText.textContent = 'LIVE MIRROR';
   btnLiveFeed.classList.remove('active', 'btn-primary');
   btnLiveFeed.classList.add('btn-secondary');
@@ -385,15 +532,80 @@ function stopMirror() {
   appendTerminalLine('[MIRROR] Live mirror stopped.', 'system');
 }
 
-btnLiveFeed.addEventListener('click', () => (mirrorTimer ? stopMirror() : startMirror()));
+btnLiveFeed.addEventListener('click', () => (mirrorLive ? stopMirror() : startMirror()));
 if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
+
+/**
+ * Where the mirror image actually paints inside its element.
+ *
+ * The live mirror uses `object-fit: contain`, so a 9:16 frame showing a taller
+ * 1080x2400 screen letterboxes it. Mapping a click against the element box
+ * instead of the painted box skews every tap horizontally — and would put the
+ * agent's element overlay in the wrong place too. Both use this.
+ */
+function nxImageContentRect(img) {
+  const r = img.getBoundingClientRect();
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!r.width || !r.height) return null;
+  if (!nw || !nh) return { left: r.left, top: r.top, width: r.width, height: r.height };
+
+  const contained = getComputedStyle(img).objectFit === 'contain';
+  const scale = contained
+    ? Math.min(r.width / nw, r.height / nh)
+    : Math.max(r.width / nw, r.height / nh);
+  const width = nw * scale;
+  const height = nh * scale;
+  return {
+    left: r.left + (r.width - width) / 2,
+    top: r.top + (r.height - height) / 2,
+    width,
+    height
+  };
+}
+window.nxImageContentRect = nxImageContentRect;
+
+/** Hold this long without moving and the tap becomes a long press. */
+const LONG_PRESS_MS = 450;
+
+const mirrorKeyButtons = Array.from(document.querySelectorAll('.mirror-key'));
+
+function setMirrorKeysEnabled(on) {
+  for (const btn of mirrorKeyButtons) btn.disabled = !on;
+}
+
+/**
+ * Press a hardware key. The server validates the name against its own
+ * allowlist, so an unknown one fails there rather than reaching the device.
+ */
+async function sendMirrorKey(key) {
+  try {
+    const res = await fetch('/api/mirror/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || res.statusText);
+    }
+    if (mirrorTimer) setTimeout(pullMirrorFrame, 150);
+  } catch (err) {
+    appendTerminalLine(`[MIRROR] Key "${key}" failed: ${err.message}`, 'adb-error');
+  }
+}
+
+setMirrorKeysEnabled(false);
+for (const btn of mirrorKeyButtons) {
+  btn.addEventListener('click', () => sendMirrorKey(btn.dataset.key));
+}
 
 (function wireMirrorInput() {
   let down = null;
 
   function norm(e) {
-    const r = phoneScreenshot.getBoundingClientRect();
-    if (!r.width || !r.height) return null;
+    const r = nxImageContentRect(phoneScreenshot);
+    if (!r || !r.width || !r.height) return null;
     return {
       x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
       y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
@@ -405,33 +617,39 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ x1, y1, x2, y2, duration })
     });
-    setTimeout(pullMirrorFrame, 100);
+    if (mirrorTimer) setTimeout(pullMirrorFrame, 100);
   }
 
   phoneScreenshot.setAttribute('draggable', 'false');
   phoneScreenshot.addEventListener('dragstart', (e) => e.preventDefault());
 
   phoneScreenshot.addEventListener('pointerdown', (e) => {
-    if (!mirrorTimer) return;
+    // Only the primary button drags. Middle and right have their own meanings
+    // below, and without this they would also register as taps on release.
+    if (!mirrorLive || e.button !== 0) return;
     e.preventDefault();
     try { phoneScreenshot.setPointerCapture(e.pointerId); } catch {  }
     down = { pt: norm(e), t: Date.now() };
   });
 
   phoneScreenshot.addEventListener('pointerup', async (e) => {
-    if (!mirrorTimer || !down || !down.pt) { down = null; return; }
+    if (!mirrorLive || e.button !== 0 || !down || !down.pt) { down = null; return; }
     try { phoneScreenshot.releasePointerCapture(e.pointerId); } catch {  }
     const up = norm(e);
     const dist = up ? Math.hypot(up.x - down.pt.x, up.y - down.pt.y) : 0;
+    const held = Date.now() - down.t;
     try {
       if (dist > 0.03) {
-        await sendSwipe(down.pt.x, down.pt.y, up.x, up.y, Math.max(80, Math.min(500, Date.now() - down.t)));
+        await sendSwipe(down.pt.x, down.pt.y, up.x, up.y, Math.max(80, Math.min(500, held)));
+      } else if (held >= LONG_PRESS_MS) {
+        // A swipe that never moves is how `input` expresses a long press.
+        await sendSwipe(down.pt.x, down.pt.y, down.pt.x, down.pt.y, Math.min(1500, held));
       } else {
         await fetch('/api/mirror/tap', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x: down.pt.x, y: down.pt.y })
         });
-        setTimeout(pullMirrorFrame, 120);
+        if (mirrorTimer) setTimeout(pullMirrorFrame, 120);
       }
     } catch (err) {
       appendTerminalLine(`[MIRROR] Input failed: ${err.message}`, 'adb-error');
@@ -439,10 +657,30 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
     down = null;
   });
 
+  // scrcpy's conventions: right-click goes back, middle-click goes home.
+  phoneScreenshot.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (mirrorLive) sendMirrorKey('back');
+  });
+
+  phoneScreenshot.addEventListener('auxclick', (e) => {
+    if (e.button !== 1 || !mirrorLive) return;
+    e.preventDefault();
+    sendMirrorKey('home');
+  });
+
+  // A static frame is a snapshot of where the screen *was*; tapping it would
+  // land wherever the phone has moved on to since. Start the mirror instead.
+  phoneScreenshot.addEventListener('click', () => {
+    if (mirrorLive || btnLiveFeed.disabled) return;
+    appendTerminalLine('[MIRROR] Starting live mirror — a static frame is not safe to tap.', 'adb-info');
+    startMirror();
+  });
+
   let wheelLock = false;
   let wheelAccum = 0;
   phoneScreenshot.addEventListener('wheel', (e) => {
-    if (!mirrorTimer) return;
+    if (!mirrorLive) return;
     e.preventDefault();
     wheelAccum += e.deltaY;
     if (wheelLock) return;
@@ -458,6 +696,121 @@ if (liveFeedText) liveFeedText.textContent = 'LIVE MIRROR';
     });
     setTimeout(() => { wheelLock = false; }, 170);
   }, { passive: false });
+})();
+
+/**
+ * PC keyboard passthrough.
+ *
+ * Focus the phone frame (click it) and your keystrokes go to the phone instead
+ * of the browser; Esc gives the keyboard back. Printable characters are
+ * buffered and sent as one `input text` call — a round trip per character runs
+ * ~200ms each and typing would fall hopelessly behind.
+ *
+ * Everything goes through one promise chain, so a buffered word is always
+ * flushed before the Backspace or Enter that follows it.
+ */
+(function wireKeyboardPassthrough() {
+  const frame = document.getElementById('phone-frame');
+  const screen = document.getElementById('phone-screen-container');
+  if (!frame) return;
+
+  const NAMED_KEYS = {
+    Backspace: 'delete',
+    Enter: 'enter',
+    Tab: 'tab',
+    ArrowUp: 'up',
+    ArrowDown: 'down',
+    ArrowLeft: 'left',
+    ArrowRight: 'right'
+  };
+
+  const FLUSH_DELAY_MS = 120;
+
+  let buffer = '';
+  let flushTimer = null;
+  let queue = Promise.resolve();
+  let hint = null;
+
+  const enqueue = (fn) => { queue = queue.then(fn).catch(() => {  }); return queue; };
+
+  async function flushNow() {
+    const text = buffer;
+    buffer = '';
+    if (!text) return;
+    try {
+      const res = await fetch('/api/mirror/text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || res.statusText);
+      }
+      if (mirrorTimer) setTimeout(pullMirrorFrame, 150);
+    } catch (err) {
+      appendTerminalLine(`[MIRROR] Typing failed: ${err.message}`, 'adb-error');
+    }
+  }
+
+  function scheduleFlush() {
+    clearTimeout(flushTimer);
+    flushTimer = setTimeout(() => { flushTimer = null; enqueue(flushNow); }, FLUSH_DELAY_MS);
+  }
+
+  function flushPending() {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    enqueue(flushNow);
+  }
+
+  function showHint(on) {
+    if (on && !hint && screen) {
+      hint = document.createElement('div');
+      hint.className = 'kbd-hint';
+      hint.textContent = 'KEYBOARD → PHONE · ESC TO RELEASE';
+      screen.appendChild(hint);
+    } else if (!on && hint) {
+      hint.remove();
+      hint = null;
+    }
+  }
+
+  frame.addEventListener('focus', () => {
+    frame.classList.add('kbd-active');
+    showHint(true);
+  });
+
+  frame.addEventListener('blur', () => {
+    flushPending();
+    frame.classList.remove('kbd-active');
+    showHint(false);
+  });
+
+  frame.addEventListener('keydown', (e) => {
+    // Leave browser shortcuts (copy, reload, devtools) alone.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      frame.blur();
+      return;
+    }
+
+    const named = NAMED_KEYS[e.key];
+    if (named) {
+      e.preventDefault();
+      flushPending();
+      enqueue(() => sendMirrorKey(named));
+      return;
+    }
+
+    if (e.key.length === 1) {
+      e.preventDefault();
+      buffer += e.key;
+      scheduleFlush();
+    }
+  });
 })();
 
 const btnRecord = document.getElementById('btn-record');
@@ -551,6 +904,20 @@ async function fetchScreenshot() {
 function submitCommand(opts = {}) {
   const text = cmdTextInput.value.trim();
   if (!text) return;
+
+  // While the AGENT tab is open, the command box (and therefore voice, which
+  // calls straight into here) drives the autonomous agent instead of the
+  // single-shot NLP pipeline.
+  if (window.nxAgentActive) {
+    appendTerminalLine(`[AGENT] Task: "${text}"`, 'adb-info');
+    socket.send(JSON.stringify({
+      type: 'agent_task',
+      text,
+      source: opts.source === 'voice' ? 'voice' : 'text'
+    }));
+    cmdTextInput.value = '';
+    return;
+  }
 
   appendTerminalLine(`[INPUT] Sent Command: "${text}"`, 'system');
   const payload = { type: 'execute_command', command: text };
@@ -791,6 +1158,7 @@ if (btnTestUnlock) {
 
 
 const tabMap = {
+  'tab-btn-agent': 'tab-content-agent',
   'tab-btn-contacts': 'tab-content-contacts',
   'tab-btn-files': 'tab-content-files',
   'tab-btn-macros': 'tab-content-macros',
@@ -811,6 +1179,10 @@ Object.keys(tabMap).forEach(btnId => {
       btn.classList.add('active');
       const content = document.getElementById(tabMap[btnId]);
       if (content) content.classList.remove('hidden');
+      window.nxAgentActive = btnId === 'tab-btn-agent';
+      cmdTextInput.placeholder = window.nxAgentActive
+        ? "Describe a task… (e.g. 'airplane mode on kar do')"
+        : "Give a command (e.g. 'Yash ko call karo' or 'Shutdown PC')...";
       drawConnectorPaths();
     });
   }
@@ -943,5 +1315,108 @@ if (btnWireless) {
     }
 
     btnWireless.disabled = false;
+  });
+}
+
+
+// --- Cable-free pairing (Android 11+ Wireless debugging) --------------------
+const btnPair = document.getElementById('btn-wireless-pair');
+const btnConnect = document.getElementById('btn-wireless-connect');
+const pairAddress = document.getElementById('wl-pair-address');
+const pairCode = document.getElementById('wl-pair-code');
+const connectAddress = document.getElementById('wl-connect-address');
+const pairStatus = document.getElementById('wl-pair-status');
+
+function setPairStatus(text, ok) {
+  if (!pairStatus) return;
+  pairStatus.textContent = text;
+  pairStatus.className = ok ? 'wireless-status active' : 'wireless-status';
+}
+
+// The server does the real validation; this only keeps an obviously incomplete
+// entry from costing the user a round trip and a 21s adb timeout.
+function looksLikeHostPort(value) {
+  return /^[A-Za-z0-9.\-[\]:]+:\d{1,5}$/.test(String(value || '').trim());
+}
+
+async function postWireless(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+if (btnPair) {
+  btnPair.addEventListener('click', async () => {
+    const address = (pairAddress?.value || '').trim();
+    const code = (pairCode?.value || '').trim();
+
+    if (!looksLikeHostPort(address)) {
+      appendTerminalLine('[PAIR] Enter the pairing address as host:port, e.g. 192.168.1.7:37123', 'adb-error');
+      return;
+    }
+    if (!/^\d{6}$/.test(code)) {
+      appendTerminalLine('[PAIR] Enter the 6-digit code shown on the phone.', 'adb-error');
+      return;
+    }
+
+    btnPair.disabled = true;
+    btnPair.textContent = 'PAIRING...';
+    setPairStatus('PAIRING...', false);
+    appendTerminalLine(`[PAIR] Pairing with ${address}...`, 'system');
+
+    try {
+      await postWireless('/api/wireless/pair', { address, code });
+      setPairStatus('PAIRED — NOW CONNECT', true);
+      appendTerminalLine('[PAIR] Paired. Now enter the IP & Port from the Wireless debugging screen and hit CONNECT.', 'adb-success');
+      if (pairCode) pairCode.value = '';
+      // The connect host is the same phone; only the port differs, so prefill
+      // the host and leave the port for the user to read off the screen.
+      if (connectAddress && !connectAddress.value) {
+        connectAddress.value = `${address.slice(0, address.lastIndexOf(':'))}:`;
+      }
+      connectAddress?.focus();
+    } catch (err) {
+      setPairStatus('PAIRING FAILED', false);
+      appendTerminalLine(`[PAIR] ${err.message}`, 'adb-error');
+    }
+
+    btnPair.textContent = 'PAIR DEVICE';
+    btnPair.disabled = false;
+  });
+}
+
+if (btnConnect) {
+  btnConnect.addEventListener('click', async () => {
+    const address = (connectAddress?.value || '').trim();
+
+    if (!looksLikeHostPort(address)) {
+      appendTerminalLine('[PAIR] Enter the connect address as host:port, e.g. 192.168.1.7:41235', 'adb-error');
+      return;
+    }
+
+    btnConnect.disabled = true;
+    btnConnect.textContent = 'CONNECTING...';
+    setPairStatus('CONNECTING...', false);
+    appendTerminalLine(`[PAIR] Connecting to ${address}...`, 'system');
+
+    try {
+      await postWireless('/api/wireless/connect', { address });
+      setPairStatus(`CONNECTED (${address})`, true);
+      appendTerminalLine(`[PAIR] Connected wirelessly to ${address}. No cable needed.`, 'adb-success');
+      if (typeof window.vaniSpeak === 'function') {
+        window.vaniSpeak('Wireless device connected.');
+      }
+    } catch (err) {
+      setPairStatus('CONNECT FAILED', false);
+      appendTerminalLine(`[PAIR] ${err.message}`, 'adb-error');
+    }
+
+    btnConnect.textContent = 'CONNECT';
+    btnConnect.disabled = false;
   });
 }

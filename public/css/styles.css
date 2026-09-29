@@ -1,24 +1,55 @@
+/**
+ * Design tokens.
+ *
+ * The names are the original ones on purpose: every rule in this file already
+ * refers to them, so re-pointing them upgrades the whole app at once instead of
+ * requiring 2300 lines of edits.
+ *
+ * What changed and why:
+ *  - Five fully-saturated neons competed for attention and produced no
+ *    hierarchy. Cyan is now *the* accent; green/red/yellow are demoted to
+ *    status meaning only, and toned down to match.
+ *  - Depth now comes from layered surfaces, not from glow on everything.
+ *  - --text-dim was #475a7c on a near-black ground: about 3:1, under WCAG AA.
+ *    Every text token is now AA or better at its intended size.
+ */
 :root {
-  --bg-color: #050814;
-  --panel-bg: rgba(10, 16, 33, 0.6);
-  --panel-border: rgba(0, 240, 255, 0.15);
+  --bg-color: #070b16;
+  --bg-sunken: #04070e;
 
+  /* Layered surfaces — elevation instead of a single translucent slab. */
+  --surface-1: #0c1322;
+  --surface-2: #121b2e;
+  --surface-3: #1a2540;
+  --panel-bg: rgba(12, 19, 34, 0.72);
+  --panel-border: rgba(148, 178, 224, 0.12);
+  --panel-border-strong: rgba(148, 178, 224, 0.24);
 
-  --accent-cyan: #00f0ff;
-  --accent-purple: #bd00ff;
-  --accent-green: #39ff14;
-  --accent-red: #ff0055;
-  --accent-yellow: #ffb700;
+  /* The one accent. */
+  --accent-cyan: #22d3ee;
+  --accent-soft: rgba(34, 211, 238, 0.12);
+  /* Kept only for the primary-action gradient, not as a second theme colour. */
+  --accent-purple: #a855f7;
 
+  /* Status only. Never decoration. */
+  --accent-green: #34d399;
+  --accent-red: #f87171;
+  --accent-yellow: #fbbf24;
 
-  --text-primary: #e2e8f0;
-  --text-secondary: #8a9fc4;
-  --text-dim: #475a7c;
+  --text-primary: #e8eefc;
+  --text-secondary: #a9b8d4;
+  --text-dim: #7286a8;
 
-
+  /* Orbitron is a display face: brand and headings only, never body or data. */
   --font-hud: 'Orbitron', sans-serif;
-  --font-sans: 'Inter', sans-serif;
-  --font-mono: 'Fira Code', monospace;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'Fira Code', ui-monospace, monospace;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.55);
 }
 
 * {
@@ -208,15 +239,15 @@ body {
 
 
 .hud-header {
-  height: 60px;
-  background: var(--panel-bg);
+  height: 54px;
+  background: var(--surface-1);
   border: 1px solid var(--panel-border);
-  backdrop-filter: blur(10px);
+  border-radius: var(--radius);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 25px;
-  box-shadow: 0 0 25px rgba(0, 240, 255, 0.05);
+  padding: 0 18px;
+  box-shadow: var(--shadow-2);
 }
 
 .header-logo {
@@ -275,7 +306,7 @@ body {
 
 .status-dot.connected {
   background-color: var(--accent-green);
-  box-shadow: 0 0 10px var(--accent-green);
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
 }
 
 .status-dot.disconnected {
@@ -285,16 +316,17 @@ body {
 }
 
 .status-text {
-  font-family: var(--font-hud);
+  font-family: var(--font-sans);
   font-size: 11px;
-  letter-spacing: 1px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
 }
 
 .status-details {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-secondary);
-  border-left: 2px solid var(--accent-purple);
+  border-left: 1px solid var(--panel-border-strong);
   padding-left: 12px;
 }
 
@@ -308,48 +340,66 @@ body {
 }
 
 
+/**
+ * Solid surfaces, not frosted glass. Dropping `backdrop-filter: blur(15px)`
+ * costs nothing visually once the surface colours are layered properly, saves a
+ * full-viewport blur pass on every frame of the 30fps mirror, and removes the
+ * trap it created: a backdrop-filtered ancestor becomes the containing block
+ * for fixed-position descendants, which is what pinned the maximized mirror
+ * inside its 320px column.
+ */
 .hud-panel {
-  background: var(--panel-bg);
+  background: var(--surface-1);
   border: 1px solid var(--panel-border);
-  backdrop-filter: blur(15px);
-  border-radius: 6px;
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 0 30px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-2);
   position: relative;
   min-height: 0;
+  overflow: hidden;
 }
 
+/* One hairline of accent at the top edge, not a glowing bar on every panel. */
 .hud-panel::before {
   content: '';
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: 2px;
-  background: linear-gradient(90deg, var(--accent-cyan), transparent);
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent-cyan), transparent 55%);
+  opacity: 0.45;
 }
 
 .panel-header {
-  padding: 15px 20px 10px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--panel-border);
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
 }
 
 .panel-header h2 {
   font-family: var(--font-hud);
-  font-size: 14px;
-  letter-spacing: 1.5px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  font-weight: 700;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
+/* The subtitle was cyan, which put it at the same visual weight as the title it
+   describes. It is a caption; it should read as one. */
 .panel-subtitle {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--accent-cyan);
-  letter-spacing: 0.5px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.3px;
+  text-align: right;
 }
 
 .panel-content {
@@ -363,47 +413,65 @@ body {
 
 
 
+/**
+ * Four stacked cards, each holding one short value, spent ~270px of a 320px
+ * column to say four things. They are now label/value rows on one card: the
+ * same information in about a third of the height, and the difference goes to
+ * the phone mirror, which is the thing worth looking at.
+ */
 .diagnostics-summary {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 
 .diag-widget {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.03);
-  border-radius: 4px;
-  padding: 10px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.diagnostics-summary .diag-widget:last-child {
+  border-bottom: none;
 }
 
 .diag-label {
-  font-family: var(--font-hud);
-  font-size: 9px;
-  color: var(--text-secondary);
-  letter-spacing: 1px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  color: var(--text-dim);
 }
 
 .diag-value {
   font-family: var(--font-mono);
-  font-size: 14px;
-  color: var(--accent-cyan);
+  font-size: 12px;
+  color: var(--text-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
-
+/* The bar spans both columns *below* the label/value pair. It sits between them
+   in the markup, so it needs `order` to stop auto-placement pushing the value
+   down to a third row. */
 .battery-bar-container {
-  height: 4px;
-  background: rgba(255, 255, 255, 0.1);
+  grid-column: 1 / -1;
+  order: 2;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.07);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .battery-level-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-purple), var(--accent-cyan));
-  box-shadow: 0 0 8px var(--accent-cyan);
+  background: var(--accent-cyan);
   transition: width 0.5s ease-in-out;
 }
 
@@ -412,15 +480,21 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
+  /* stretch, not center: the viewbar and the resize handle are full-width rows */
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 12px;
   min-height: 0;
+  --mirror-h: 420px;
 }
 
 .phone-frame {
   width: 100%;
-  aspect-ratio: 9 / 16;
+  /* Height is the user's to set (drag handle / collapse / maximize), not a fixed
+     cap. It used to be `max-height: 380px` plus a 9/16 aspect inside a 320px
+     column, which left the mirror too small to read anything on. */
+  height: var(--mirror-h);
+  flex: none;
   background: #02040a;
   border: 6px solid #1e293b;
   border-radius: 24px;
@@ -431,7 +505,185 @@ body {
   justify-content: center;
   position: relative;
   overflow: hidden;
-  max-height: 380px;
+}
+
+/* Collapse / expand. These ride in the control grid rather than a strip of
+   their own — a separate row cost the mirror ~50px of the column, which is the
+   height this whole change was trying to give it. */
+.mirror-view-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  width: 34px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.mirror-view-btn:hover {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+}
+
+/* Hardware keys + the resize grip share one row: a row of their own would cost
+   the mirror another ~30px of an already full column. */
+.mirror-keybar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  height: 26px;
+}
+
+.mirror-key {
+  width: 30px;
+  flex: none;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.mirror-key:hover:not(:disabled) {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  background: rgba(0, 240, 255, 0.06);
+}
+
+.mirror-key:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.mirror-key-power:hover:not(:disabled) {
+  color: var(--accent-red, #ff6b6b);
+  border-color: var(--accent-red, #ff6b6b);
+  background: rgba(255, 60, 60, 0.08);
+}
+
+/* Focused frame = your keystrokes are going to the phone, not the browser. */
+.phone-frame:focus {
+  outline: none;
+}
+
+.phone-frame.kbd-active {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 18px rgba(0, 240, 255, 0.35);
+}
+
+.kbd-hint {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: rgba(0, 240, 255, 0.15);
+  border: 1px solid var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-family: var(--font-hud);
+  font-size: 8px;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+
+.mirror-resize {
+  flex: 1;
+  min-width: 30px;
+  align-self: center;
+  height: 8px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: ns-resize;
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.mirror-resize::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  border-top: 2px dotted rgba(255, 255, 255, 0.25);
+}
+
+.mirror-resize:hover,
+.mirror-resize.is-dragging {
+  background: rgba(0, 240, 255, 0.08);
+  border-color: var(--accent-cyan);
+}
+
+.screen-mirror-wrapper.is-collapsed .phone-frame,
+.screen-mirror-wrapper.is-collapsed .mirror-keybar {
+  display: none;
+}
+
+/* Maximized: lift the frame out of the 320px column entirely. */
+.mirror-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 4, 10, 0.85);
+  backdrop-filter: blur(4px);
+  z-index: 3999;
+}
+
+/* Class sits on the frame itself, not on an ancestor, because mirrorView.js
+   reparents the frame to <body> to maximize it: `.hud-panel` has a
+   `backdrop-filter`, which makes it the containing block for fixed-position
+   descendants and traps the frame inside the column however high its z-index. */
+.phone-frame.is-maximized {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  height: min(94vh, 1100px);
+  width: auto;
+  max-width: 96vw;
+  /* mirrorView.js sets this from the screenshot's own dimensions */
+  aspect-ratio: var(--mirror-aspect, 9 / 16);
+  z-index: 4000;
+}
+
+/* Going fixed leaves a hole in the column; hold the space so nothing jumps. */
+.screen-mirror-wrapper.is-maximized::before {
+  content: '';
+  flex: none;
+  height: var(--mirror-h);
+}
+
+/* Maximized, the keys travel with the frame and float at the bottom of the
+   viewport — left in the column they would sit behind the backdrop, out of
+   reach exactly when the mirror is being used most. */
+.mirror-keybar.is-maximized {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4001;
+  height: 36px;
+  gap: 6px;
+  padding: 5px 8px;
+  background: rgba(10, 14, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.mirror-keybar.is-maximized .mirror-key {
+  width: 38px;
+}
+
+.mirror-keybar.is-maximized .mirror-resize {
+  display: none;
 }
 
 .phone-frame::after {
@@ -463,7 +715,9 @@ body {
 .phone-screen img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* contain, not cover: a 9:20 phone in a 9:16 frame got its top and bottom
+     cropped away, which is half the reason the mirror was hard to read. */
+  object-fit: contain;
 }
 
 .no-screen-fallback {
@@ -523,11 +777,22 @@ body {
 }
 
 
+/**
+ * The pipeline strip.
+ *
+ * Every stage already carries a live `message` from the server; it used to be
+ * dumped into the terminal and thrown away here, leaving five circles that only
+ * changed colour. That message is now the point: each stage shows what it is
+ * actually doing, and the strip reads as instrumentation rather than decoration.
+ */
 .pipeline-flow-container {
-  height: 120px;
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.02);
-  border-radius: 6px;
+  height: 148px;
+  background:
+    radial-gradient(120% 140% at 50% -20%, rgba(34, 211, 238, 0.06), transparent 60%),
+    var(--bg-sunken);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  overflow: hidden;
   position: relative;
   display: flex;
   justify-content: center;
@@ -547,78 +812,216 @@ body {
 
 .connector-path {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.06);
-  stroke-width: 3;
+  stroke: rgba(148, 178, 224, 0.10);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 5;
 }
 
+/* A completed hop: packets running along the wire toward the next stage. */
 .glow-connector-path {
   fill: none;
   stroke: var(--accent-cyan);
-  stroke-width: 3;
+  stroke-width: 2;
   stroke-linecap: round;
-  stroke-dasharray: 8 8;
-  animation: stroke-dash 2s linear infinite;
+  stroke-dasharray: 2 10;
+  filter: drop-shadow(0 0 4px rgba(34, 211, 238, 0.6));
+  animation: stroke-dash 0.7s linear infinite;
 }
 
 @keyframes stroke-dash {
-  to { stroke-dashoffset: -40; }
+  to { stroke-dashoffset: -24; }
 }
+
+/* ---- telemetry strip ---------------------------------------------------- */
+
+.pipe-telemetry {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(4, 7, 14, 0.75);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.pipe-state {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  letter-spacing: 1px;
+  font-weight: 500;
+}
+
+.pipe-state[data-state='idle'] { color: var(--text-dim); }
+.pipe-state[data-state='run'] {
+  color: var(--accent-cyan);
+  background: var(--accent-soft);
+  animation: pipe-breathe 1.1s ease-in-out infinite;
+}
+.pipe-state[data-state='ok'] { color: var(--accent-green); }
+.pipe-state[data-state='fail'] { color: var(--accent-red); }
+
+@keyframes pipe-breathe {
+  50% { opacity: 0.55; }
+}
+
+.pipe-cmd {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipe-clock {
+  flex: none;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A slow sweep so an idle strip still reads as live instrumentation. It speeds
+   up while a command is running; `prefers-reduced-motion` stops it entirely. */
+.pipe-scan {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(34, 211, 238, 0.05) 45%,
+    rgba(34, 211, 238, 0.12) 50%,
+    rgba(34, 211, 238, 0.05) 55%,
+    transparent 100%
+  );
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation: pipe-sweep 7s linear infinite;
+}
+
+.pipeline-flow-container.is-running .pipe-scan {
+  animation-duration: 1.8s;
+}
+
+@keyframes pipe-sweep {
+  from { background-position: -50% 0; }
+  to   { background-position: 150% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pipe-scan,
+  .pipe-state[data-state='run'] { animation: none; }
+  .glow-connector-path { animation: none; }
+}
+
+/* ---- per-stage readout -------------------------------------------------- */
+
+.node-msg {
+  display: block;
+  max-width: 88px;
+  min-height: 22px;
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 8.5px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--text-dim);
+  overflow: hidden;
+  /* Two lines, then ellipsis — a long message must not resize the strip. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.pipeline-node.active .node-msg { color: var(--accent-cyan); }
+.pipeline-node.success .node-msg { color: var(--text-secondary); }
+.pipeline-node.failed .node-msg { color: var(--accent-red); }
+
+/* Stage index, the way a real console numbers its stages. */
+.pipeline-node::before {
+  content: '[' attr(data-index) ']';
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
+.pipeline-node.active::before { color: var(--accent-cyan); opacity: 1; }
+.pipeline-node.success::before { color: var(--accent-green); opacity: 0.9; }
+.pipeline-node.failed::before { color: var(--accent-red); opacity: 1; }
 
 .pipeline-nodes {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   width: 100%;
   position: relative;
   z-index: 2;
-  padding: 0 20px;
+  /* clears the telemetry strip */
+  padding: 34px 16px 0;
 }
 
 .pipeline-node {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  width: 75px;
+  gap: 4px;
+  width: 92px;
 }
 
 .node-circle {
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
-  background: rgba(10, 16, 33, 0.9);
-  border: 2px solid rgba(255, 255, 255, 0.1);
+  background: var(--surface-2);
+  border: 1px solid var(--panel-border-strong);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-dim);
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-1);
 }
 
 .pipeline-node span {
-  font-family: var(--font-hud);
+  font-family: var(--font-sans);
   font-size: 9px;
-  letter-spacing: 0.5px;
-  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
 }
 
 
 .pipeline-node.active .node-circle {
   border-color: var(--accent-cyan);
   color: var(--accent-cyan);
-  box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
-  animation: pulse-glow-border 1.5s infinite alternate;
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.45);
+  animation: node-ping 1.4s ease-out infinite;
+}
+
+@keyframes node-ping {
+  0%   { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.45); }
+  70%  { box-shadow: 0 0 0 9px rgba(34, 211, 238, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
 }
 
 .pipeline-node.active span {
   color: var(--accent-cyan);
-  text-shadow: 0 0 5px rgba(0, 240, 255, 0.3);
 }
 
 .pipeline-node.success .node-circle {
   border-color: var(--accent-green);
   color: var(--accent-green);
-  box-shadow: 0 0 15px rgba(57, 255, 20, 0.2);
+  background: rgba(52, 211, 153, 0.08);
 }
 
 .pipeline-node.success span {
@@ -628,8 +1031,9 @@ body {
 .pipeline-node.failed .node-circle {
   border-color: var(--accent-red);
   color: var(--accent-red);
-  box-shadow: 0 0 15px rgba(255, 0, 85, 0.2);
-  animation: vibrate 0.3s infinite;
+  background: rgba(248, 113, 113, 0.10);
+  /* One shake on arrival, not forever — a permanent vibration is noise. */
+  animation: vibrate 0.3s 2;
 }
 
 .pipeline-node.failed span {
@@ -648,9 +1052,9 @@ body {
 
 .console-wrapper {
   flex: 1;
-  background: #03050c;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 4px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -659,18 +1063,21 @@ body {
 }
 
 .console-header {
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding: 8px 15px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--panel-border);
+  padding: 7px 12px;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
+/* Muted: these are chrome, and at full saturation three traffic lights were
+   the brightest thing on a screen whose actual status lives elsewhere. */
 .terminal-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
+  opacity: 0.45;
 }
 .terminal-dot.red { background-color: var(--accent-red); }
 .terminal-dot.yellow { background-color: var(--accent-yellow); }
@@ -686,29 +1093,47 @@ body {
 
 .console-body {
   flex: 1;
-  padding: 15px;
+  padding: 10px 14px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  /* 8px between every line, on top of 1.5 line-height, made a dense log read as
+     a loose list. The rhythm now comes from line-height alone. */
+  gap: 0;
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 11.5px;
+  line-height: 1.65;
 }
 
 .console-line {
   color: var(--text-primary);
   white-space: pre-wrap;
-  word-break: break-all;
-  animation: typing-appear 0.5s cubic-bezier(0, 0.7, 0.2, 1) forwards;
+  /* break-all split words mid-character and made every line a ragged block;
+     these are commands and paths, so break at sensible points only. */
+  overflow-wrap: anywhere;
+  word-break: normal;
+  position: relative;
+  padding: 1px 0 1px 12px;
+  animation: typing-appear 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
   opacity: 0;
-  transform: translateX(-10px);
+}
+
+/* A repeated line counts up in place rather than filling the feed. */
+.console-line[data-repeat]::after {
+  content: attr(data-repeat);
+  margin-left: 8px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font-size: 9px;
+  vertical-align: middle;
 }
 
 @keyframes typing-appear {
-  0% { opacity: 0; transform: translateX(-10px); text-shadow: 0 0 0 transparent; }
-  50% { opacity: 1; transform: translateX(2px); text-shadow: 0 0 10px currentColor; }
-  100% { opacity: 1; transform: translateX(0); text-shadow: 0 0 4px currentColor; }
+  0% { opacity: 0; transform: translateX(-6px); }
+  100% { opacity: 1; transform: translateX(0); }
 }
 
 .console-line.system {
@@ -731,9 +1156,31 @@ body {
   color: var(--accent-red);
 }
 
+/* Raw adb invocations: present, readable, but visibly the quietest thing in
+   the feed — they are context for the lines that matter, not the content. */
 .console-line.adb-debug {
   color: var(--text-dim);
 }
+
+.console-line.adb-debug::before {
+  content: '›';
+  position: absolute;
+  left: 0;
+  color: var(--accent-cyan);
+  opacity: 0.5;
+}
+
+.console-line.adb-error::before,
+.console-line.adb-warning::before,
+.console-line.adb-success::before {
+  position: absolute;
+  left: 0;
+  opacity: 0.8;
+}
+
+.console-line.adb-error::before { content: '✕'; }
+.console-line.adb-warning::before { content: '!'; }
+.console-line.adb-success::before { content: '✓'; }
 
 
 .command-controls {
@@ -873,6 +1320,41 @@ body {
   width: 100%;
 }
 
+/* REFRESH SCREEN / LIVE MIRROR / ● REC under the phone frame. The left column
+   is a fixed 320px, so at the default `.hud-btn` padding the three buttons are
+   wider than the panel and the record button clipped off the right edge. */
+.mirror-controls {
+  /* All three action labels on one row need ~360px in a 280px column, so they
+     take two rows: refresh + the two view toggles, then mirror + record.
+     Explicit placement rather than flex-wrap, which lands on the same rows only
+     by a few pixels. */
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  width: 100%;
+}
+
+.mirror-controls #btn-refresh-screen,
+.mirror-controls #btn-live-feed {
+  grid-column: 1;
+}
+
+.mirror-controls #btn-record {
+  grid-column: 2 / -1;
+}
+
+.mirror-controls .hud-btn {
+  min-width: 0;
+  padding: 12px 10px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-align: center;
+}
+
+.mirror-controls .hud-btn svg {
+  flex-shrink: 0;
+}
+
 .language-helper {
   font-family: var(--font-sans);
   font-size: 10px;
@@ -884,18 +1366,26 @@ body {
 
 .tab-header {
   display: flex;
+  /* Six labels do not fit on one 340px line; wrap to a second row rather than
+     letting the end tabs clip out of the panel. */
+  flex-wrap: wrap;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .tab-btn {
-  flex: 1;
+  /* `flex: 1` (basis 0) forced every tab to an equal share, so the long labels
+     overflowed the panel. Sizing from content and growing into the slack keeps
+     them inside it. */
+  flex: 1 1 auto;
+  min-width: 30%;
   background: transparent;
   border: none;
   color: var(--text-secondary);
   font-family: var(--font-hud);
-  font-size: 12px;
-  letter-spacing: 1px;
-  padding: 15px 0;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  padding: 14px 8px;
   cursor: pointer;
   position: relative;
   transition: color 0.3s;
@@ -912,7 +1402,9 @@ body {
 .tab-btn.active::after {
   content: '';
   position: absolute;
-  bottom: -1px;
+  /* 0, not -1px: with a wrapped tab row a negative offset bleeds onto the tab
+     below it. */
+  bottom: 0;
   left: 0;
   width: 100%;
   height: 2px;
@@ -1096,6 +1588,23 @@ body {
   border-color: rgba(57, 255, 20, 0.2);
   background: rgba(57, 255, 20, 0.05);
   box-shadow: 0 0 10px rgba(57, 255, 20, 0.05);
+}
+
+.pair-row {
+  display: flex;
+  gap: 8px;
+}
+
+.pair-row .hud-input {
+  min-width: 0;
+  flex: 1;
+}
+
+.pair-row .hud-input.pair-code {
+  flex: 0 0 88px;
+  font-family: var(--font-mono);
+  letter-spacing: 2px;
+  text-align: center;
 }
 
 .hud-btn.wireless-on {
@@ -1698,4 +2207,437 @@ body {
   outline: 1px solid var(--accent-cyan);
   outline-offset: -1px;
   box-shadow: inset 0 0 24px rgba(0, 240, 255, 0.18);
+}
+
+
+
+
+.tab-btn-hero {
+  color: var(--accent-cyan);
+  font-weight: 700;
+  /* grow only — `flex: 1.4` would reset the basis to 0 and reintroduce the
+     equal-share squeeze this tab is widest in. */
+  flex-grow: 1.2;
+}
+.tab-btn-hero:not(.active) {
+  color: var(--accent-cyan);
+  opacity: 0.75;
+}
+
+
+
+
+.agent-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.agent-mark {
+  position: absolute;
+  border: 1px solid rgba(0, 240, 255, 0.5);
+  border-radius: 3px;
+  background: rgba(0, 240, 255, 0.06);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.agent-mark[data-kind="input"]  { border-color: rgba(255, 183, 0, 0.55); background: rgba(255, 183, 0, 0.06); }
+.agent-mark[data-kind="toggle"] { border-color: rgba(189, 0, 255, 0.55);  background: rgba(189, 0, 255, 0.07); }
+.agent-mark[data-kind="text"]   { border-color: rgba(138, 159, 196, 0.3); background: transparent; }
+
+.agent-mark-tag {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  min-width: 15px;
+  padding: 0 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  color: #02040a;
+  background: var(--accent-cyan);
+  border-radius: 2px 0 3px 0;
+  font-weight: 600;
+}
+.agent-mark[data-kind="input"] .agent-mark-tag  { background: var(--accent-yellow); }
+.agent-mark[data-kind="toggle"] .agent-mark-tag { background: var(--accent-purple); color: #fff; }
+.agent-mark[data-kind="text"] .agent-mark-tag   { background: rgba(138, 159, 196, 0.6); }
+
+
+.agent-mark-target {
+  border-color: var(--accent-green) !important;
+  background: rgba(57, 255, 20, 0.14) !important;
+  box-shadow: 0 0 12px rgba(57, 255, 20, 0.7), inset 0 0 10px rgba(57, 255, 20, 0.25);
+  animation: agent-target-pulse 0.9s ease-in-out infinite;
+  z-index: 2;
+}
+.agent-mark-target .agent-mark-tag {
+  background: var(--accent-green) !important;
+  color: #02040a !important;
+}
+
+@keyframes agent-target-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(57, 255, 20, 0.5), inset 0 0 8px rgba(57, 255, 20, 0.2); }
+  50%      { box-shadow: 0 0 20px rgba(57, 255, 20, 0.95), inset 0 0 14px rgba(57, 255, 20, 0.4); }
+}
+
+.agent-ripple {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border: 2px solid var(--accent-green);
+  border-radius: 50%;
+  animation: agent-ripple 0.65s ease-out forwards;
+  z-index: 3;
+}
+@keyframes agent-ripple {
+  from { transform: scale(0.2); opacity: 1; }
+  to   { transform: scale(1.6); opacity: 0; }
+}
+
+
+
+
+#tab-content-agent { gap: 14px; }
+
+
+.agent-taskbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-task-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.agent-task-row .hud-input {
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.agent-mic {
+  flex: 0 0 auto;
+  width: 40px;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--accent-cyan);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.agent-mic:hover {
+  background: rgba(0, 240, 255, 0.18);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.35);
+}
+
+.agent-btn-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.agent-run  { flex: 1.2; }
+.agent-stop { flex: 1; }
+.agent-run:disabled,
+.agent-stop:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.agent-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-hud);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.agent-switch input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-yellow);
+  cursor: pointer;
+}
+.agent-switch:has(input:checked) { color: var(--accent-yellow); }
+
+
+
+
+.agent-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-chip {
+  flex: 0 0 auto;
+  font-family: var(--font-hud);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  padding: 5px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--panel-border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text-secondary);
+}
+.agent-chip-busy {
+  color: var(--accent-cyan);
+  border-color: rgba(0, 240, 255, 0.5);
+  animation: agent-chip-blink 1.1s ease-in-out infinite;
+}
+.agent-chip-good { color: var(--accent-green);  border-color: rgba(57, 255, 20, 0.5); }
+.agent-chip-warn { color: var(--accent-yellow); border-color: rgba(255, 183, 0, 0.5); }
+.agent-chip-bad  { color: var(--accent-red);    border-color: rgba(255, 0, 85, 0.5); }
+
+@keyframes agent-chip-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+.agent-meter {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.agent-meter-track {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.agent-meter-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+  transition: width 0.35s ease;
+}
+.agent-meter-fill.agent-meter-hot {
+  background: linear-gradient(90deg, var(--accent-yellow), var(--accent-red));
+}
+.agent-meter-text {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+
+
+
+.agent-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+.agent-section-grow { flex: 1; }
+
+.agent-h3,
+.agent-h3-row h3 {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/**
+ * Empty states.
+ *
+ * PLAN and TRACE were bare headings above nothing, so the panel holding the
+ * flagship feature read as broken rather than idle. `:empty` covers it with no
+ * JavaScript: the moment the agent appends a child, the message disappears on
+ * its own.
+ */
+.agent-plan:empty::before,
+.agent-rail:empty::before {
+  display: block;
+  padding: 8px 10px;
+  border: 1px dashed var(--panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-plan:empty::before {
+  content: 'No run yet. Describe a task above and press RUN — the agent will lay out its steps here first.';
+}
+
+.agent-rail:empty::before {
+  content: 'Each step the agent takes will appear here with its screenshot and reasoning.';
+}
+.agent-h3-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.agent-h3-actions {
+  display: flex;
+  gap: 6px;
+}
+.agent-h3-actions .hud-btn {
+  padding: 5px 9px;
+  font-size: 9px;
+}
+
+
+
+
+.agent-plan {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 96px;
+  overflow-y: auto;
+}
+.agent-plan-item {
+  position: relative;
+  padding: 4px 8px 4px 22px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: rgba(0, 0, 0, 0.25);
+  border-left: 2px solid rgba(0, 240, 255, 0.3);
+  border-radius: 0 3px 3px 0;
+}
+.agent-plan-item::before {
+  content: '▸';
+  position: absolute;
+  left: 8px;
+  color: var(--accent-cyan);
+}
+.agent-plan-done {
+  color: var(--text-dim);
+  border-left-color: var(--accent-green);
+}
+.agent-plan-done::before { content: '✓'; color: var(--accent-green); }
+.agent-plan-failed { border-left-color: var(--accent-red); }
+.agent-plan-failed::before { content: '✕'; color: var(--accent-red); }
+.agent-plan-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+
+
+
+.agent-stream {
+  flex: 1;
+  min-height: 120px;
+  max-height: 190px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.agent-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: agent-line-in 0.18s ease-out;
+}
+@keyframes agent-line-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+.agent-line-meta    { color: var(--text-dim); }
+.agent-line-info    { color: var(--text-secondary); }
+.agent-line-thought { color: var(--accent-cyan); }
+.agent-line-good    { color: var(--accent-green); }
+.agent-line-warn    { color: var(--accent-yellow); }
+.agent-line-error   { color: var(--accent-red); }
+.agent-line-ask {
+  color: var(--accent-purple);
+  font-weight: 500;
+}
+
+
+
+
+.agent-rail {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  min-height: 74px;
+}
+.agent-rail::-webkit-scrollbar { height: 5px; }
+
+.agent-card {
+  flex: 0 0 auto;
+  width: 58px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.2s, transform 0.15s;
+  animation: agent-line-in 0.2s ease-out;
+}
+.agent-card:hover { transform: translateY(-2px); border-color: var(--accent-cyan); }
+.agent-card-active { border-color: var(--accent-cyan); box-shadow: 0 0 10px rgba(0, 240, 255, 0.4); }
+
+.agent-card img {
+  width: 100%;
+  height: 52px;
+  object-fit: cover;
+  object-position: top center;
+  display: block;
+}
+.agent-card-blank {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-hud);
+  font-size: 15px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.03);
+}
+.agent-card-label {
+  display: block;
+  padding: 2px 3px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 1.3;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-card-ok      { border-bottom: 2px solid var(--accent-green); }
+.agent-card-failed  { border-bottom: 2px solid var(--accent-red); }
+.agent-card-blocked { border-bottom: 2px solid var(--accent-red); }
+.agent-card-declined{ border-bottom: 2px solid var(--accent-yellow); }
+.agent-card-dry_run { border-bottom: 2px solid var(--accent-yellow); }
+
+.agent-status-line {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  min-height: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
