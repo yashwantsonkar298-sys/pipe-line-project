@@ -1,17 +1,17 @@
 /**
  * Persistence for the skill library.
  *
- * SQLite via `node:sqlite`, which ships inside Node — so the project's "three
- * runtime dependencies" claim still holds. Skills are small but they accumulate
- * forever and are read on every agent run; rewriting a whole JSON file per
- * write (the pattern macros.js uses) does not survive that.
+ * SQLite via `node:sqlite` where it is available. Older supported Node releases
+ * do not ship that module, so the store transparently falls back to a JSON
+ * file. Skills are small, and the fallback keeps startup and normal operation
+ * working across Node 20 and newer runtimes.
  *
  * The database lives in `server/.runtime/`, which is gitignored: a skill records
  * what someone actually did on their own phone, and that is not repository
  * content.
  */
 
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -42,6 +42,96 @@ CREATE INDEX IF NOT EXISTS skills_normalized ON skills (normalized);
 `;
 
 let db = null;
+let DatabaseSync = null;
+
+try {
+  DatabaseSync = createRequire(import.meta.url)('node:sqlite').DatabaseSync;
+} catch {
+  // Node 20. Node 22.5+ and Node 24 expose node:sqlite.
+}
+
+class JsonDatabase {
+  constructor(file) {
+    this.file = file;
+    this.rows = new Map();
+    if (file !== ':memory:' && fs.existsSync(file)) {
+      try {
+        for (const row of JSON.parse(fs.readFileSync(file, 'utf8'))) {
+          if (row.embedding?.type === 'Buffer' && Array.isArray(row.embedding.data)) {
+            row.embedding = Buffer.from(row.embedding.data);
+          }
+          this.rows.set(row.id, row);
+        }
+      } catch {
+        this.rows.clear();
+      }
+    }
+  }
+
+  exec() {}
+
+  close() {}
+
+  persist() {
+    if (this.file === ':memory:') return;
+    fs.writeFileSync(this.file, JSON.stringify([...this.rows.values()], null, 2));
+  }
+
+  prepare(sql) {
+    const normalized = sql.replace(/\s+/g, ' ').trim();
+    return {
+      run: (...params) => {
+        let changes = 0;
+        if (/^INSERT INTO skills/.test(normalized)) {
+          const [id, name, task, template, normalizedTask, app, paramsJson, stepsJson, embedding, createdAt] = params;
+          this.rows.set(id, {
+            id, name, task, template, normalized: normalizedTask, app, params_json: paramsJson,
+            steps_json: stepsJson, embedding, uses: 0, successes: 0,
+            created_at: createdAt, last_used_at: null
+          });
+          changes = 1;
+        } else if (/^UPDATE skills\s+SET name =/.test(normalized)) {
+          const [name, task, template, app, paramsJson, stepsJson, embedding, id] = params;
+          const row = this.rows.get(id);
+          if (row) {
+            Object.assign(row, {
+              name, task, template, app, params_json: paramsJson, steps_json: stepsJson, embedding
+            });
+            changes = 1;
+          }
+        } else if (/^UPDATE skills\s+SET uses =/.test(normalized)) {
+          const [successes, lastUsedAt, id] = params;
+          const row = this.rows.get(id);
+          if (row) {
+            row.uses += 1;
+            row.successes += successes;
+            row.last_used_at = lastUsedAt;
+            changes = 1;
+          }
+        } else if (/^DELETE FROM skills/.test(normalized)) {
+          changes = this.rows.delete(params[0]) ? 1 : 0;
+        }
+        this.persist();
+        return { changes };
+      },
+      get: (...params) => {
+        if (/COUNT\(\*\) AS n/.test(normalized)) {
+          return { n: this.rows.size };
+        }
+        if (/WHERE normalized =/.test(normalized)) {
+          return [...this.rows.values()].find((row) => row.normalized === params[0]) ?? undefined;
+        }
+        if (/WHERE id =/.test(normalized)) {
+          return this.rows.get(params[0]) ?? undefined;
+        }
+        return undefined;
+      },
+      all: (limit) => [...this.rows.values()]
+        .sort((a, b) => (b.last_used_at ?? b.created_at) - (a.last_used_at ?? a.created_at))
+        .slice(0, limit)
+    };
+  }
+}
 
 /** Open lazily so importing this module never touches the filesystem. */
 export function getDb(file = DB_FILE) {
@@ -49,7 +139,7 @@ export function getDb(file = DB_FILE) {
   if (file !== ':memory:' && !fs.existsSync(RUNTIME_DIR)) {
     fs.mkdirSync(RUNTIME_DIR, { recursive: true });
   }
-  db = new DatabaseSync(file);
+  db = DatabaseSync ? new DatabaseSync(file) : new JsonDatabase(file);
   db.exec(SCHEMA);
   return db;
 }
